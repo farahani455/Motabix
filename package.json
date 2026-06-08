@@ -1,0 +1,127 @@
+{
+    "name": "motabix",
+    "displayName": "Motabix",
+    "description": "Right sidebar sample",
+    "version": "0.0.1",
+    "publisher": "MojtabaFarahani",
+    "engines": {
+        "vscode": "^1.120.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "repository": {
+        "type": "git",
+        "url": ""
+    },
+    "main": "./out/extension.js",
+    "contributes": {
+        "configuration": {
+            "title": "Motabix",
+            "properties": {
+                "motabix.apiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Your OpenAI API Key"
+                },
+                "motabix.model": {
+                    "type": "string",
+                    "default": "gpt-4o",
+                    "enum": [
+                        "gpt-4o",
+                        "gpt-4o-mini",
+                        "gpt-4-turbo",
+                        "gemini-2.5-pro"
+                    ],
+                    "enumDescriptions": [
+                        "GPT-4o - balanced, fast, good at code",
+                        "GPT-4o Mini - faster and cheaper",
+                        "GPT-4 Turbo - better reasoning, slower",
+                        "Gemini is so powerfull"
+                    ],
+                    "description": "Model to use"
+                },
+                "motabix.baseURL": {
+                    "type": "string",
+                    "default": "https://api.openai.com/v1",
+                    "description": "open AI BaseURL"
+                }
+            }
+        },
+        "commands": [
+            {
+                "command": "myExtension.acceptChanges",
+                "title": "Accept Changes",
+                "icon": "$(check)"
+            },
+            {
+                "command": "myExtension.rejectChanges",
+                "title": "Reject Changes",
+                "icon": "$(close)"
+            },
+            {
+                "command": "motabix.openSettings",
+                "title": "Open Settings",
+                "icon": "$(gear)"
+            },
+            {
+                "command": "motabix.openInRightSidebar",
+                "title": "Motabix: Open in Right Sidebar"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "myExtension.acceptChanges",
+                    "when": "myExtension.hasPendingChanges",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "myExtension.rejectChanges",
+                    "when": "myExtension.hasPendingChanges",
+                    "group": "navigation@2"
+                }
+            ],
+            "view/title": [
+                {
+                    "command": "motabix.openSettings",
+                    "when": "view == motabix.chatView",
+                    "group": "navigation"
+                }
+            ]
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "motabix",
+                    "title": "Motabix",
+                    "icon": "media/icon.svg"
+                }
+            ]
+        },
+        "views": {
+            "motabix": [
+                {
+                    "type": "webview",
+                    "id": "motabix.chatView",
+                    "name": "Motabix Chat"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/diff": "^7.0.2",
+        "@types/node": "^25.5.2",
+        "@types/vscode": "^1.120.0",
+        "typescript": "^6.0.2"
+    },
+    "dependencies": {
+        "@vscode/codicons": "^0.0.45",
+        "diff": "^9.0.0",
+        "openai": "^6.33.0"
+    }
+}

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+               <link rel="stylesheet" href="{mediaUri}/codicon.css">
+               <link href="{mediaUri}/hljs/vs2015.min.css" rel="stylesheet"/>
+               <link rel="stylesheet" href="{mediaUri}/hljs/github-dark.min.css">
+              <link href="{mediaUri}/motabix.css" rel="stylesheet"/>
+          </head>
+          <body>
+              <div class="app-shell">
+                  <header class="topbar">
+                      <div class="topbar-title">Motabix</div>
+                      <div class="topbar-actions">
+                        <button id="clearHistory" class="icon-button" type="button" aria-label="Clear chat history" title="Clear history">
+                            <span aria-hidden="true" class="codicon codicon-clear-all"></span>
+                        </button>
+                        <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Settings">
+                            <span aria-hidden="true" class="codicon codicon-gear"></span>
+                        </button>
+                      </div>
+                  </header>
+
+                  <div class="messages" id="messages"></div>
+
+                <div class="composer">
+                    <div class="content-attachments">
+                        <button id="addContentBtn" class="add-content-btn" type="button" title="Add content">
+                            <span class="codicon codicon-add"></span>
+                            <span>Add content</span>
+                        </button>
+                        <div class="attached-content" id="attachedContent">
+                            <span class="content-chip" data-content="active-document">
+                                <span class="codicon codicon-file"></span>
+                                <span>Active Document</span>
+                                <button class="remove-chip" type="button" aria-label="Remove">&times;</button>
+                            </span>
+                        </div>
+                                        <!-- Add Content Dropdown -->
+                        <div id="addContentDropdown" class="add-content-dropdown hidden">
+                            <div class="content-option" data-content="active-document">
+                                <span class="codicon codicon-file"></span>Active Document
+                            </div>
+                            <div class="content-option" data-content="browse-project">
+                                <span class="codicon codicon-folder-opened"></span>Browse from Project
+                            </div>
+                        </div>
+                    </div>
+                    <div id="textInput" contenteditable="true" class="chat-input" placeholder="Write something..."></div>
+                    <div class="composer-actions">
+                        <div class="selectors-group">
+                        <div class="model-selector-wrapper">
+                            <button id="model" class="model-button" type="button" title="Select model">
+                                <span class="codicon codicon-sparkle"></span>
+                                <span class="model-label" id="model-label" data-model="gpt-4o">gpt-4o</span>
+                                <span class="codicon codicon-chevron-down"></span>
+                            </button>
+                            <div id="modelDropdown" class="model-dropdown hidden">
+                                <div class="model-option" data-model="gpt-4o">gpt-4o</div>
+                                <div class="model-option" data-model="gpt-5.3-codex">gpt-5.3-codex</div>
+                                <div class="model-option" data-model="gpt-5.3-codex-spark">gpt-5.3-codex-spark</div>
+                                <div class="model-option" data-model="gemini-2.5-pro">gemini-2.5-pro</div>
+                                <div class="model-option" data-model="claude-sonnet-4-6">claude-sonnet-4-6</div>
+                                <div class="model-option" data-model="gapgpt-qwen-3.5">gapgpt-qwen-3.5</div>
+                            </div>
+                        </div>
+                        <div class="agent-selector-wrapper">
+                            <button id="setAgent" class="agent-button" type="button" title="Set Agent">
+                                <span class="codicon codicon-agent"></span>
+                                <span class="agent-label" id="agent-label" data-agent="Ask">Ask</span>
+                                <span class="codicon codicon-chevron-down"></span>
+                            </button>
+                            <div id="agentDropdown" class="agent-dropdown hidden">
+                                <div class="agent-option" data-agent="Ask">Ask</div>
+                                <div class="agent-option" data-agent="Editor">Editor</div>
+                            </div>
+                        </div>
+                        </div>
+                        <button id="sendButton" class="send-button" type="button" aria-label="Send message" title="Send">
+                            <span aria-hidden="true" class="codicon codicon-send"></span>
+                        </button>
+                    </div>
+                </div>
+                
+
+              </div>
+                <script src="{mediaUri}/hljs/highlight.min.js" ></script>
+
+              <!-- Core Languages -->
+                <script src="{mediaUri}/hljs/javascript.min.js"></script>
+                <script src="{mediaUri}/hljs/typescript.min.js"></script>
+                <script src="{mediaUri}/hljs/python.min.js"></script>
+                <script src="{mediaUri}/hljs/java.min.js"></script>
+                <script src="{mediaUri}/hljs/csharp.min.js"></script>
+                <script src="{mediaUri}/hljs/cpp.min.js"></script>
+                <script src="{mediaUri}/hljs/c.min.js"></script>
+
+                <!-- Web -->
+                <script src="{mediaUri}/hljs/css.min.js"></script>
+                <script src="{mediaUri}/hljs/xml.min.js"></script>
+                <script src="{mediaUri}/hljs/json.min.js"></script>
+
+                <!-- Backend -->
+                <script src="{mediaUri}/hljs/php.min.js"></script>
+                <script src="{mediaUri}/hljs/ruby.min.js"></script>
+                <script src="{mediaUri}/hljs/go.min.js"></script>
+                <script src="{mediaUri}/hljs/rust.min.js"></script>
+
+                <!-- Scripting & Shell -->
+                <script src="{mediaUri}/hljs/bash.min.js"></script>
+                <script src="{mediaUri}/hljs/shell.min.js"></script>
+                <script src="{mediaUri}/hljs/powershell.min.js"></script>
+
+                <!-- Database -->
+                <script src="{mediaUri}/hljs/sql.min.js"></script>
+
+                
+
+                <!-- Config & Markup -->
+                <script src="{mediaUri}/hljs/yaml.min.js"></script>
+                <script src="{mediaUri}/hljs/markdown.min.js"></script>
+                <script src="{mediaUri}/hljs/dockerfile.min.js"></script>
+
+                <!-- Other -->
+                <script src="{mediaUri}/hljs/swift.min.js"></script>
+                <script src="{mediaUri}/hljs/kotlin.min.js"></script>
+                <script src="{mediaUri}/hljs/dart.min.js"></script>
+
+              <script src="{mediaUri}/motabix.js" ></script>
+          </body>
+          </html>

@@ -1,0 +1,53 @@
+
+ممنون که کد خود را به اشتراک گذاشتید. کدی که ارسال کردید تقریباً درست است، اما چند نکته وجود دارد که می‌توان آن را اصلاح کرد تا کیفیت و پایداری آن بهبود یابد. همچنین باید بررسی شود که از کدام کتابخانه یا کلاینت برای API استفاده می‌کنید (مثلاً OpenAI). کد اصلاح‌شده شما به شرح زیر است:
+### کد اصلاح‌شده:
+‍‍`‍‍`‍‍`typescript
+export async function sendMessage(userMessage: string): Promise<string> {
+    try {
+        // بررسی می‌کنیم که userMessage خالی نباشد
+        if (!userMessage || typeof userMessage !== 'string') {
+            throw new Error('User message must be a non-empty string.');
+        }
+
+        // فراخوانی API
+        const response = await client.chat.completions.create({
+            model: 'gpt-4',
+            messages: [
+                { role: 'system', content: 'You are a helpful coding assistant.' },
+                { role: 'user', content: userMessage }
+            ]
+        });
+
+        // اطمینان حاصل می‌کنیم که آرایه ‍‍`choices‍‍` وجود دارد و طول آن > 0 است
+        if (response.choices && response.choices.length > 0) {
+            return response.choices[0].message?.content || '';
+        } else {
+            throw new Error('No response choices found in the API result.');
+        }
+    } catch (error) {
+        // نمایش خطا یا مدیریت آن
+        console.error('Error in sendMessage:', error);
+        return 'An error occurred while processing your request.';
+    }
+}
+‍‍`‍‍`‍‍`
+
+### نکات اصلاح:
+
+1. **بررسی ورودی:**
+   بررسی کردیم که مقدار ‍‍`userMessage‍‍` رشته‌ای معتبر باشد. اگر ورودی نامعتبر باشد، خطای مناسبی ارسال می‌کنیم.
+
+2. **مدیریت خطا:**
+   با استفاده از یک بلوک ‍‍`try-catch‍‍`، خطاهای احتمالی ایجاد شده در اجرای درخواست API مدیریت می‌شوند.
+
+3. **بررسی پاسخ API:**
+   اطمینان حاصل می‌کنیم که آرایه ‍‍`choices‍‍` حاوی مقادیر معتبر باشد و به درستی به ‍‍`message.content‍‍` دسترسی پیدا کنیم.
+
+4. **اصلاح مدل:**
+   اگر منظورتان مدل ‍‍`gpt-4‍‍` است (و نه ‍‍`gpt-4o‍‍` که در کد ذکر شده)، آن را تصحیح کردیم.
+
+5. **لطفاً بررسی کنید:**
+   مطمئن شوید که ‍‍`client‍‍` به درستی مقداردهی اولیه شده است (مثلاً از کتابخانه OpenAI) و همچنین مجوزهای دسترسی به API دارید.
+
+### نتیجه:
+این کد اکنون باید خطاهای احتمالی را مدیریت کند و مطمئن باشد که ورودی و خروجی به درستی پردازش می‌شوند.

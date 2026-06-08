@@ -1,0 +1,25 @@
+# Compiled output
+out/
+
+# Dependencies
+node_modules/
+
+# VS Code Extension package
+*.vsix
+
+# macOS
+.DS_Store
+
+# Test files
+test_diff.js
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+
+# TypeScript cache
+*.tsbuildinfo
