@@ -23,3 +23,5 @@ npm-debug.log*
 
 # TypeScript cache
 *.tsbuildinfo
+
+AGENT_README.md
