@@ -34,7 +34,7 @@ export class ChatService implements IChatService {
     ): Promise<string> {
         try {
             const stream = await this.client.chat.completions.create({
-                max_tokens:1000,
+                max_tokens:6000,
                 model: model,
                 messages,
                 stream: true

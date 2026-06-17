@@ -121,26 +121,3 @@ npm run watch
 # اجرا در VS Code
 # F5 را فشار دهید
 ```
-
-## تنظیمات
-
-در VS Code Settings:
-- `motabix.apiKey`: کلید API OpenAI
-- `motabix.model`: مدل AI (پیش‌فرض: gpt-4o)
-- `motabix.baseURL`: آدرس API (پیش‌فرض: https://api.openai.com/v1)
-
-## وابستگی‌ها
-
-```json
-{
-  dependencies: {
-    openai: ^6.33.0,
-    diff: ^9.0.0,
-    @vscode/codicons: ^0.0.45
-  }
-}
-```
-
-## لایسنس
-
-مشاهده فایل LICENSE.txt

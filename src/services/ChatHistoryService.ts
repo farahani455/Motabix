@@ -73,15 +73,14 @@ export class ChatHistoryService implements IChatHistoryService{
     }
     public async setItemById(requestId:string,item:ChatMessage):Promise<void>{
         const chatSession = this.getSession();
+        if (!chatSession?.messages) return;
+        const index = chatSession.messages.findIndex(m => m.Id === requestId);
 
-        for(let chatItem of chatSession.messages){
-            if(chatItem.Id==requestId){
-                chatItem=item;
-            }
+        if (index !== -1) {
+            chatSession.messages[index] = item;
+            await this.workspaceState.update(this.STORAGE_KEY,chatSession);
         }
-
-        await this.workspaceState.update(this.STORAGE_KEY,chatSession);
-
+        
         return undefined;
 
     }
