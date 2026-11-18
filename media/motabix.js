@@ -197,7 +197,13 @@ function handleWindowMessage(event) {
 
             break;
         }
-
+        case 'code_response_error': {
+            const parsedMessage = message.text;
+            emptyBubble(message.requestId,message.responseId);
+            
+            addAssistantMessage(parsedMessage, message.responseId,message.language, false);
+            break;
+        }
         case 'loadHistory':
             renderHistory(message.history);
             break;

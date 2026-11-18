@@ -19,7 +19,9 @@ export class SendMessageCommand implements IWebviewCommand {
         private readonly chatHistoryService: IChatHistoryService,
         private readonly diffService:DiffService,
         private readonly messageHandler:NotifHandlerService,
-        private readonly context: vscode.ExtensionContext
+        private readonly context: vscode.ExtensionContext,
+        private readonly editorService:EditorService,
+        private readonly codeHistory:CodeHistoryService
     ){}
 
     async execute(webviewView: vscode.WebviewView, message: any): Promise<void> {
@@ -117,20 +119,36 @@ export class SendMessageCommand implements IWebviewCommand {
                 (message.model ?? "gpt-4o"),
                 responseFormat
             );
+            if(response.indexOf('error:')==0){
+                webviewView.webview.postMessage({
+                    command: 'code_response_error',
+                    requestId,
+                    responseId,
+                    language:detectLanguage(response.replace('error:','')),
+                    text: response
+                });
+                return;
+            }
+            let parsedCode = null;
+            try{
+                parsedCode = parseAIResponse(response);
+            }catch(error){
+                this.messageHandler.showError('Response Parsing Error', error as Error );
+                return;
+            }
             
-            const parsedCode = parseAIResponse(response);
             const activeContent=activeDocument?.fullContent??'';
 
-            const editorService:EditorService=new EditorService(this.messageHandler);
-            const codeHistory:CodeHistoryService= new CodeHistoryService(this.context);
+            // const editorService:EditorService=new EditorService(this.messageHandler);
+            // const codeHistory:CodeHistoryService= new CodeHistoryService(this.context);
             let lineChanges:LineChange[]=[];
 
             if(editor){
 
                 try{
 
-                    codeHistory.saveState(editor.document.uri,activeContent);
-                    editorService.insertCodeDirect(editor,parsedCode.code);
+                    this.codeHistory.saveState(editor.document.uri,activeContent);
+                    this.editorService.insertCodeDirect(editor,parsedCode.code);
                     lineChanges= this.diffService.compareTexts(activeContent,parsedCode.code);
                 }catch(error){
                     if(editor) {
@@ -141,15 +159,24 @@ export class SendMessageCommand implements IWebviewCommand {
                 }
 
             }else{
-                const neweditor= await editorService.createNewFile(parsedCode.code,parsedCode.language??"plaintext",parsedCode.suggestedFilename??"readme.md");
+                const neweditor= await this.editorService.createNewFile(parsedCode.code,parsedCode.language??"plaintext",parsedCode.suggestedFilename??"readme.md");
 
             }
 
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise<void>(resolve => {
+                const disposable = vscode.workspace.onDidChangeTextDocument(e => {
+                    if (e.document === editor?.document) {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+                // Fallback timeout in case the event doesn't fire
+                setTimeout(resolve, 500);
+            });
 
             const refreshedEditor = vscode.window.activeTextEditor;
             if(refreshedEditor){
-                this.diffService.highlightChanges(refreshedEditor,lineChanges);
+                this.diffService.highlightChanges(refreshedEditor, lineChanges);
             }
 
             webviewView.webview.postMessage({

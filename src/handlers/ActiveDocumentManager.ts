@@ -19,7 +19,7 @@ export class ActiveDocumentManager {
         this.onDidChangeState(hasEditor => {
             if (hasEditor) {
                 const info = this.getActiveEditorInfo();
-                console.log(`✅ Editor Active: ${info?.fileName} (${info?.lineCount} line)`);
+                console.log(`✅ Editor Active: ${info?.fileName} (${info?.lineCount} lines)`);
                 
                 webviewView.webview.postMessage({
                     command: 'changeActiveDocument',

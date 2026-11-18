@@ -23,6 +23,8 @@ import { ChangeManagementCommands } from './handlers/ChangeManagementCommands';
 import { DiffService } from './services/DiffService';
 import { ActiveDocumentManager } from './handlers/ActiveDocumentManager';
 import { NotifHandlerService } from './services/NotifHandlerService';
+import { CodeHistoryService } from './services/CodeHistoryService';
+import { EditorService } from './services/EditorService';
 
 export function activate(context: vscode.ExtensionContext) {
     const client:OpenAI = new OpenAIClientFactory().getClient();
@@ -33,7 +35,16 @@ export function activate(context: vscode.ExtensionContext) {
     const renderchatHistory:RenderChatHistory=new RenderChatHistory(chatHistoryService);
     const diffService:DiffService=new DiffService();
     const notifHandler:NotifHandlerService= NotifHandlerService.getInstance();
-    messageHandler.register("sendMessage", new SendMessageCommand(chatService,chatHistoryService,diffService,notifHandler,context));
+    const editorService:EditorService= new EditorService(notifHandler);
+    const codeHistory:CodeHistoryService= new CodeHistoryService(context);  
+    messageHandler.register("sendMessage", new SendMessageCommand(
+        chatService,
+        chatHistoryService,
+        diffService,
+        notifHandler,context,
+        editorService,
+        codeHistory
+    ));
     messageHandler.register("openSettings", new OpenSettingsCommand());
     messageHandler.register("clearHistory", new ClearChatHistory(chatHistoryService));
     messageHandler.register("setSessionConfig",sessionConfigService);

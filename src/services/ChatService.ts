@@ -23,7 +23,7 @@ export class ChatService implements IChatService {
             return result;
         } catch (error) {
             vscode.window.showErrorMessage('Send Message Error: ' + error);
-            return '';
+            return 'error:'+error;
         }
     }
 
