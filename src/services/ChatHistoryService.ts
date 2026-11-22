@@ -94,7 +94,7 @@ export class ChatHistoryService implements IChatHistoryService{
             return message.content;
         }
 
-        return `${message.content}\n\nAttached files:\n${this.formatFiles(message.files)}`;
+        return `${message.content}\n\nAttached files:\nThe following file contents are provided inline for you to analyze. Do not claim you lack access.\n\n${this.formatFiles(message.files)}`;
     }
     private formatFiles(files: AttachedFile[]): string {
         return files

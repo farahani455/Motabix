@@ -1,18 +1,23 @@
 const vscode = acquireVsCodeApi();
+  let preferredModel = '';
+  let isAgentRunning = false;
+  let activeRequestId = null;
 
   const elements = {
         messages: document.getElementById('messages'),
         input: document.getElementById('textInput'),
         send: document.getElementById('sendButton'),
+        stop: document.getElementById('stopButton'),
         settings: document.getElementById('settings'),
         clearHistory: document.getElementById('clearHistory'),
         modelButton :document.getElementById('model'),
         modelDropdown :document.getElementById('modelDropdown'),
         modelLabel :document.getElementById('model-label'),
-        modelOptions :document.querySelectorAll('.model-option'),
+        modelOptions :[],
         agentButton:document.getElementById('setAgent'),
         agentDropdown:document.getElementById('agentDropdown'),
         agentLabel:document.getElementById('agent-label'),
+        agentIcon:document.getElementById('agent-icon'),
         agentOptions:document.querySelectorAll('.agent-option'),
         addContentBtn:document.getElementById('addContentBtn'),
         addContentDropdown:document.getElementById('addContentDropdown'),
@@ -21,15 +26,32 @@ const vscode = acquireVsCodeApi();
   };
 
   function initializeApp() {
-    // Select model
-    getSelectedModel();
     getSelectedAgent();
     bindEvents();
     notifyReady();
+    requestProviderModels();
+  }
+
+  function requestProviderModels() {
+      vscode.postMessage({ command: 'listModels' });
+  }
+
+  function setAgentRunning(running, requestId) {
+      isAgentRunning = !!running;
+      activeRequestId = running ? (requestId || null) : null;
+      if (elements.send) {
+          elements.send.disabled = isAgentRunning;
+          elements.send.classList.toggle('hidden', isAgentRunning);
+      }
+      if (elements.stop) {
+          elements.stop.disabled = !isAgentRunning;
+          elements.stop.classList.toggle('hidden', !isAgentRunning);
+      }
   }
 
   function bindEvents() {
       elements.send.addEventListener('click', handleSendClick);
+      elements.stop.addEventListener('click', handleStopClick);
       elements.settings.addEventListener('click', handleOpenSettings);
       elements.clearHistory.addEventListener('click', handleClearHistory);
       elements.input.addEventListener('keydown',handleKeydownInput)
@@ -41,7 +63,69 @@ const vscode = acquireVsCodeApi();
       document.addEventListener('click',handleCloseAgent);
       
       elements.addContentBtn.addEventListener('click', handleAddContentBtnClick);
+
+      document.getElementById('settingsBack').addEventListener('click', () => showSettingsPanel(false));
+      document.getElementById('settingsProvider').addEventListener('change', updateSettingsVisibility);
+      document.getElementById('saveSettings').addEventListener('click', handleSaveSettings);
+      document.getElementById('testConnection').addEventListener('click', handleTestConnection);
+      updateSettingsVisibility();
       bindContentOptions();
+  }
+
+  function updateSettingsVisibility() {
+      const provider = document.getElementById('settingsProvider').value;
+      document.getElementById('ollamaSettings').classList.toggle('hidden', provider !== 'ollama');
+      document.getElementById('routerSettings').classList.toggle('hidden', provider !== 'motabix-router');
+  }
+
+  function applyAppSettings(settings) {
+      if (!settings) {
+          return;
+      }
+      document.getElementById('settingsProvider').value = settings.provider || 'ollama';
+      document.getElementById('ollamaBaseURL').value = settings.ollamaBaseURL || 'http://127.0.0.1:11434';
+      document.getElementById('routerBaseURL').value = settings.routerBaseURL || 'http://127.0.0.1:8787';
+      document.getElementById('routerApiKey').value = settings.apiKey || '';
+      document.getElementById('runCommandPermission').value = settings.runCommandPermission || 'ask';
+      document.getElementById('pathScope').value = settings.pathScope || 'workspace';
+      document.getElementById('runCommandCwd').value = settings.runCommandCwd || '';
+      updateSettingsVisibility();
+  }
+
+  function handleSaveSettings() {
+      setSettingsStatus('', '');
+      vscode.postMessage({
+          command: 'saveAppSettings',
+          provider: document.getElementById('settingsProvider').value,
+          ollamaBaseURL: document.getElementById('ollamaBaseURL').value,
+          routerBaseURL: document.getElementById('routerBaseURL').value,
+          apiKey: document.getElementById('routerApiKey').value,
+          runCommandPermission: document.getElementById('runCommandPermission').value,
+          pathScope: document.getElementById('pathScope').value,
+          runCommandCwd: document.getElementById('runCommandCwd').value
+      });
+  }
+
+  function handleTestConnection() {
+      const testButton = document.getElementById('testConnection');
+      testButton.disabled = true;
+      setSettingsStatus('Testing connection...', '');
+      vscode.postMessage({
+          command: 'testConnection',
+          provider: document.getElementById('settingsProvider').value,
+          ollamaBaseURL: document.getElementById('ollamaBaseURL').value,
+          routerBaseURL: document.getElementById('routerBaseURL').value,
+          apiKey: document.getElementById('routerApiKey').value
+      });
+  }
+
+  function setSettingsStatus(text, kind) {
+      const el = document.getElementById('settingsStatus');
+      el.textContent = text;
+      el.classList.remove('ok', 'error');
+      if (kind) {
+          el.classList.add(kind);
+      }
   }
 
   function notifyReady() {
@@ -49,7 +133,10 @@ const vscode = acquireVsCodeApi();
   }
 
   function handleSendClick() {
-      const text = elements.input.textContent.trim();
+      if (isAgentRunning) {
+          return;
+      }
+      const text = (elements.input.innerText || elements.input.textContent || '').trim();
       const model=elements.modelLabel.getAttribute('data-model');
       const agent=elements.agentLabel.getAttribute('data-agent');
       const files=getContentFileLis();
@@ -58,6 +145,7 @@ const vscode = acquireVsCodeApi();
           return;
       }
       renderUserMessage(text);
+      setAgentRunning(true, requestId);
       vscode.postMessage({
           command: 'sendMessage',
           text,
@@ -69,12 +157,22 @@ const vscode = acquireVsCodeApi();
       CreateBubble(requestId);
       elements.input.textContent='';
   }
+
+  function handleStopClick() {
+      if (!isAgentRunning) {
+          return;
+      }
+      vscode.postMessage({
+          command: 'stopGeneration',
+          requestId: activeRequestId
+      });
+  }
   function handleKeydownInput(event){
-    if(event.keyCode == 13){
+    // Enter = send; Shift+Enter = new line in contenteditable
+    if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         handleSendClick();
     }
-    
   }
   function handleModelButtonClick(e){
         e.stopPropagation();
@@ -165,24 +263,45 @@ function handleWindowMessage(event) {
     const message = event.data;
     switch (message.command) {
         case 'stream-start-response': {
-            console.log('Start Response....');
-            emptyBubble(message.requestId,message.responseId);
+            emptyBubble(message.requestId, message.responseId);
             break;
-            
         }
         case 'stream-chunk-response': {
             if (message.content) {
-                console.log(message.content);
-                addAssistantMessage(message.content, message.responseId,message.language, true);
+                addAssistantMessage(message.content, message.responseId, message.language, true);
+            }
+            break;
+        }
+        case 'agent-step': {
+            if (message.text) {
+                addAssistantMessage(message.text, message.responseId, message.language, true);
+            }
+            break;
+        }
+        case 'editProposal': {
+            showEditProposalCard(message);
+            break;
+        }
+        case 'editProposalResult': {
+            updateEditProposalCard(message.proposalId, message.status, message.message || message.path);
+            break;
+        }
+        case 'agent-limit': {
+            if (message.text) {
+                addAssistantMessage(message.text, message.responseId, message.language, true);
+                const bubble = document.querySelector(`[data-newid="${message.responseId}"]`);
+                if (bubble) {
+                    bubble.classList.add('ai-bubble-limit');
+                }
             }
             break;
         }
 
         case 'stream-end-response': {
-            console.log('Stream ended');
             formatAssistResponse(message.responseId);
             highlightAssistResponse(message.responseId);
-            break; 
+            setAgentRunning(false);
+            break;
         }
         case 'code_response': {
             const parsedMessage = JSON.parse(message.text);
@@ -194,6 +313,7 @@ function handleWindowMessage(event) {
             highlightAssistResponse(message.responseId);
 
             showActionButton(message.responseId, 'pending');
+            setAgentRunning(false);
 
             break;
         }
@@ -202,6 +322,29 @@ function handleWindowMessage(event) {
             emptyBubble(message.requestId,message.responseId);
             
             addAssistantMessage(parsedMessage, message.responseId,message.language, false);
+            setAgentRunning(false);
+            break;
+        }
+        case 'generationStopped': {
+            setAgentRunning(false);
+            break;
+        }
+        case 'stream-error-response': {
+            const errorText =
+                message.text ||
+                (typeof message.error === 'string' ? message.error : '') ||
+                'Request failed.';
+            emptyBubble(message.requestId, message.responseId);
+            addAssistantMessage(errorText, message.responseId, message.language || 'en', false);
+            const errorBubble = document.querySelector(`[data-newid="${message.responseId}"]`);
+            if (errorBubble) {
+                errorBubble.classList.add('ai-bubble-error');
+            }
+            setAgentRunning(false);
+            break;
+        }
+        case 'agentBusy': {
+            // Keep current run; second start was rejected on Extension Host.
             break;
         }
         case 'loadHistory':
@@ -220,7 +363,34 @@ function handleWindowMessage(event) {
             activeDocumentHandler(message);
         break;
 
-
+        case 'showSettings':
+            showSettingsPanel(true);
+            setSettingsStatus('', '');
+            break;
+        case 'loadAppSettings':
+            applyAppSettings(message.settings);
+            break;
+        case 'appSettingsSaved':
+            if (message.ok) {
+                setSettingsStatus('Settings saved.', 'ok');
+                requestProviderModels();
+            } else {
+                setSettingsStatus(message.error || 'Save failed.', 'error');
+            }
+            break;
+        case 'connectionTestResult':
+            document.getElementById('testConnection').disabled = false;
+            setSettingsStatus(
+                message.message || (message.ok ? 'Connected.' : 'Connection failed.'),
+                message.ok ? 'ok' : 'error'
+            );
+            if (message.ok && Array.isArray(message.models)) {
+                applyProviderModels(message.models);
+            }
+            break;
+        case 'providerModels':
+            applyProviderModels(Array.isArray(message.models) ? message.models : []);
+            break;
         default:
             console.warn('Unknown message command:', message.command);
     }
@@ -261,19 +431,68 @@ function handleWindowMessage(event) {
       }
       console.log(config);
       if(config.model){
-            const selectedModel = config.model;
-            elements.modelLabel.textContent = selectedModel;
-            elements.modelLabel.setAttribute('data-model', selectedModel);
+            preferredModel = config.model;
+            const loaded = elements.modelOptions.map((option) => option.getAttribute('data-model'));
+            if (!loaded.length || loaded.includes(config.model)) {
+                applySelectedModel(config.model);
+            }
             elements.modelDropdown.classList.add('hidden');
       }
       if(config.agent){
-            const selectedAgent = config.agent;
-            elements.agentLabel.textContent = selectedAgent;
-            elements.agentLabel.setAttribute('data-agent', selectedAgent);
+            let selectedAgent = config.agent;
+            if (selectedAgent === 'Editor') {
+                selectedAgent = 'Edit';
+            }
+            applySelectedAgent(selectedAgent);
             elements.agentDropdown.classList.add('hidden');
 
       }
 
+  }
+
+  function applySelectedModel(selectedModel) {
+      const label = selectedModel || 'No models';
+      elements.modelLabel.textContent = label;
+      elements.modelLabel.setAttribute('data-model', selectedModel || '');
+  }
+
+  function applyProviderModels(models) {
+      const previous = preferredModel || elements.modelLabel.getAttribute('data-model') || '';
+      elements.modelDropdown.innerHTML = '';
+      elements.modelOptions = [];
+
+      if (!models.length) {
+          applySelectedModel('');
+          return;
+      }
+
+      models.forEach((modelName) => {
+          const option = document.createElement('div');
+          option.className = 'model-option';
+          option.setAttribute('data-model', modelName);
+          option.textContent = modelName;
+          option.addEventListener('click', () => {
+              preferredModel = modelName;
+              applySelectedModel(modelName);
+              elements.modelDropdown.classList.add('hidden');
+              vscode.postMessage({
+                  command: 'setSessionConfig',
+                  model: modelName
+              });
+          });
+          elements.modelDropdown.appendChild(option);
+          elements.modelOptions.push(option);
+      });
+
+      const nextModel = models.includes(previous) ? previous : models[0];
+      preferredModel = nextModel;
+      applySelectedModel(nextModel);
+      if (nextModel !== previous) {
+          vscode.postMessage({
+              command: 'setSessionConfig',
+              model: nextModel
+          });
+      }
   }
 
     function setSelectedFile(files) {
@@ -303,7 +522,23 @@ function handleWindowMessage(event) {
       appendMessage(bubble);
   }
 
-    function addAssistantMessage(content,requestId,dir,append) {
+    function ensureBubbleContent(bubble) {
+        let body = bubble.querySelector('.ai-bubble-content');
+        if (!body) {
+            body = document.createElement('div');
+            body.className = 'ai-bubble-content';
+            // Keep proposal cards / action bars as siblings after the text body.
+            const firstCard = bubble.querySelector('.edit-proposal-card, .response-actions');
+            if (firstCard) {
+                bubble.insertBefore(body, firstCard);
+            } else {
+                bubble.appendChild(body);
+            }
+        }
+        return body;
+    }
+
+    function addAssistantMessage(content, requestId, dir, append) {
         let bubble = document.querySelector(`[data-newid="${requestId}"]`);
         if (!bubble) {
             bubble = document.createElement('div');
@@ -311,34 +546,41 @@ function handleWindowMessage(event) {
             bubble.setAttribute('data-newid', requestId);
             elements.messages.appendChild(bubble);
         }
-        
-        if (!bubble.classList.contains('ai-bubble-' + dir)) {
+
+        if (dir && !bubble.classList.contains('ai-bubble-' + dir)) {
             bubble.classList.add('ai-bubble-' + dir);
         }
 
-        if (append) {
-            bubble.innerHTML += content;
-        } else { 
-            bubble.innerHTML = content;
-        }
+        const body = ensureBubbleContent(bubble);
 
-       
+        // Keep raw markdown/text while streaming; format only on stream-end.
+        // Never write textContent/innerHTML on the bubble root — that wipes Accept cards.
+        if (append) {
+            body.textContent = (body.textContent || '') + content;
+        } else {
+            body.textContent = content ?? '';
+        }
 
         elements.messages.scrollTop = elements.messages.scrollHeight;
     }
-    function formatAssistResponse(requestId){
-        let bubble = document.querySelector(`[data-newid="${requestId}"]`);
-        const content=bubble.innerHTML;
-        const formatedContent = formatAiResponse(bubble.innerHTML);
-        bubble.innerHTML=formatedContent;
 
-        
+    function formatAssistResponse(requestId) {
+        const bubble = document.querySelector(`[data-newid="${requestId}"]`);
+        if (!bubble) {
+            return;
+        }
+        const body = ensureBubbleContent(bubble);
+        const content = body.textContent || '';
+        body.innerHTML = formatAiResponse(content);
     }
 
-    function highlightAssistResponse(requestId){
-        let bubble = document.querySelector(`[data-newid="${requestId}"]`);
-
-         bubble.querySelectorAll('pre code').forEach(block => {
+    function highlightAssistResponse(requestId) {
+        const bubble = document.querySelector(`[data-newid="${requestId}"]`);
+        if (!bubble) {
+            return;
+        }
+        const body = bubble.querySelector('.ai-bubble-content') || bubble;
+        body.querySelectorAll('pre code').forEach((block) => {
             hljs.highlightElement(block);
         });
     }
@@ -349,55 +591,150 @@ function handleWindowMessage(event) {
             return;
         }
 
-        // Remove existing action buttons if any
         const existingActions = bubble.querySelector('.response-actions');
         if (existingActions) {
             existingActions.remove();
         }
 
-        // Create action buttons container
         const actionButtons = document.createElement('div');
         actionButtons.className = 'response-actions';
+        actionButtons.innerHTML = buildDecisionButtonsHtml(status, 'legacy');
+        bubble.appendChild(actionButtons);
+        bindLegacyDecisionButtons(actionButtons);
+    }
 
+    function buildDecisionButtonsHtml(status, kind) {
         if (status === 'pending') {
-            // Show clickable buttons
-            actionButtons.innerHTML = `
-                <button class="response-action-btn accept-btn" onclick="acceptResponse(this)" title="Accept changes">
-                    <span class="codicon codicon-check"></span>
-                    Accept
-                </button>
-                <button class="response-action-btn reject-btn" onclick="rejectResponse(this)" title="Reject changes">
+            return `
+                <button class="decision-btn decision-reject" type="button" data-action="reject" title="Reject">
                     <span class="codicon codicon-close"></span>
-                    Reject
+                    <span>Reject</span>
                 </button>
-            `;
-        } else if (status === 'accepted') {
-            // Show accepted state (disabled)
-            actionButtons.innerHTML = `
-                <button class="response-action-btn accept-btn accepted" disabled title="Changes accepted">
+                <button class="decision-btn decision-accept" type="button" data-action="accept" title="Accept">
                     <span class="codicon codicon-check"></span>
-                    Accepted
-                </button>
-                <button class="response-action-btn reject-btn" disabled style="opacity: 0.5;" title="Changes accepted">
-                    <span class="codicon codicon-close"></span>
-                    Reject
-                </button>
-            `;
-        } else if (status === 'rejected') {
-            // Show rejected state (disabled)
-            actionButtons.innerHTML = `
-                <button class="response-action-btn accept-btn" disabled style="opacity: 0.5;" title="Changes rejected">
-                    <span class="codicon codicon-check"></span>
-                    Accept
-                </button>
-                <button class="response-action-btn reject-btn rejected" disabled title="Changes rejected">
-                    <span class="codicon codicon-close"></span>
-                    Rejected
+                    <span>Accept</span>
                 </button>
             `;
         }
+        if (status === 'accepted') {
+            return `
+                <div class="decision-status decision-status-accepted">
+                    <span class="codicon codicon-check"></span>
+                    <span>Accepted — written to disk</span>
+                </div>
+            `;
+        }
+        if (status === 'rejected') {
+            return `
+                <div class="decision-status decision-status-rejected">
+                    <span class="codicon codicon-close"></span>
+                    <span>Rejected — discarded</span>
+                </div>
+            `;
+        }
+        return `
+            <div class="decision-status decision-status-error">
+                <span class="codicon codicon-warning"></span>
+                <span>Could not apply</span>
+            </div>
+        `;
+    }
 
-        bubble.appendChild(actionButtons);
+    function bindLegacyDecisionButtons(container) {
+        container.querySelectorAll('[data-action]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.getAttribute('data-action');
+                if (action === 'accept') {
+                    acceptResponse(btn);
+                } else if (action === 'reject') {
+                    rejectResponse(btn);
+                }
+            });
+        });
+    }
+
+    function showEditProposalCard(message) {
+        let bubble = document.querySelector(`[data-newid="${message.responseId}"]`);
+        if (!message.proposalId) {
+            return;
+        }
+        // Proposal can arrive before any text chunk — ensure a bubble exists.
+        if (!bubble) {
+            bubble = document.createElement('div');
+            bubble.className = 'bubble ai-bubble';
+            bubble.setAttribute('data-newid', message.responseId);
+            elements.messages.appendChild(bubble);
+        }
+        ensureBubbleContent(bubble);
+
+        const existing = bubble.querySelector(`[data-proposal-id="${message.proposalId}"]`);
+        if (existing) {
+            existing.remove();
+        }
+
+        const fileName = (message.path || '').split(/[/\\]/).pop() || message.path || 'file';
+        const card = document.createElement('div');
+        card.className = 'edit-proposal-card';
+        card.setAttribute('data-proposal-id', message.proposalId);
+        card.innerHTML = `
+            <div class="edit-proposal-meta">
+                <span class="codicon codicon-diff"></span>
+                <div class="edit-proposal-copy">
+                    <div class="edit-proposal-title">${message.isNewFile ? 'New file proposal' : 'Edit proposal'}</div>
+                    <div class="edit-proposal-path">${escapeHtml(fileName)}</div>
+                    <div class="edit-proposal-hint">Accept writes the file to disk. Reject discards it.</div>
+                </div>
+            </div>
+            <div class="edit-proposal-actions response-actions">
+                ${buildDecisionButtonsHtml('pending', 'proposal')}
+            </div>
+        `;
+        bubble.appendChild(card);
+
+        card.querySelectorAll('[data-action]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.getAttribute('data-action');
+                const proposalId = card.getAttribute('data-proposal-id');
+                if (action === 'accept') {
+                    vscode.postMessage({ command: 'acceptEditProposal', proposalId });
+                } else if (action === 'reject') {
+                    vscode.postMessage({ command: 'rejectEditProposal', proposalId });
+                }
+            });
+        });
+
+        elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function updateEditProposalCard(proposalId, status, detail) {
+        const card = document.querySelector(`[data-proposal-id="${proposalId}"]`);
+        if (!card) {
+            return;
+        }
+        const actions = card.querySelector('.edit-proposal-actions');
+        if (!actions) {
+            return;
+        }
+        if (status === 'accepted') {
+            actions.innerHTML = buildDecisionButtonsHtml('accepted');
+        } else if (status === 'rejected') {
+            actions.innerHTML = buildDecisionButtonsHtml('rejected');
+        } else {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-error">
+                    <span class="codicon codicon-warning"></span>
+                    <span>${detail || 'Failed'}</span>
+                </div>
+            `;
+        }
     }
 
     function appendMessage(element) {
@@ -476,33 +813,31 @@ function handleWindowMessage(event) {
         }
     }
 
-    function getSelectedModel(){
-        elements.modelOptions.forEach(option => {
-            option.addEventListener('click', () => {
-                const selectedModel = option.getAttribute('data-model');
-                elements.modelLabel.textContent = selectedModel;
-                elements.modelLabel.setAttribute('data-model', selectedModel);
-                elements.modelDropdown.classList.add('hidden');
-                // اینجا می‌تونید مدل انتخاب شده رو ذخیره کنید
-                console.log('Selected model:', selectedModel);
-
-                vscode.postMessage({
-                    command: 'setSessionConfig',
-                    model:selectedModel
-                });
-            });
-        });
+    function agentIconClass(agent) {
+        if (agent === 'Edit') {
+            return 'codicon-edit';
+        }
+        if (agent === 'Edit Automatically') {
+            return 'codicon-run-all';
+        }
+        return 'codicon-comment';
     }
+
+    function applySelectedAgent(selectedAgent) {
+        elements.agentLabel.textContent = selectedAgent;
+        elements.agentLabel.setAttribute('data-agent', selectedAgent);
+        if (elements.agentIcon) {
+            elements.agentIcon.className = 'codicon ' + agentIconClass(selectedAgent);
+        }
+    }
+
     function getSelectedAgent(){
 
         elements.agentOptions.forEach(option => {
             option.addEventListener('click', () => {
                 const selectedAgent = option.getAttribute('data-agent');
-                elements.agentLabel.textContent = selectedAgent;
-                elements.agentLabel.setAttribute('data-agent', selectedAgent);
+                applySelectedAgent(selectedAgent);
                 elements.agentDropdown.classList.add('hidden');
-                // اینجا می‌تونید مدل انتخاب شده رو ذخیره کنید
-                console.log('Selected model:', selectedAgent);
 
                 vscode.postMessage({
                     command: 'setSessionConfig',
@@ -598,5 +933,9 @@ function handleWindowMessage(event) {
         // Update UI to rejected state
         showActionButton(requestId, 'rejected');
     }
-
+    function showSettingsPanel(show) {
+        document.getElementById('settingsPanel').classList.toggle('hidden', !show);
+        document.getElementById('messages').classList.toggle('hidden', show);
+        document.querySelector('.composer').classList.toggle('hidden', show);
+    }
   initializeApp();

@@ -13,7 +13,7 @@ export class SessionConfigService implements ISessionConfigService{
         const config = this.context.globalState.get<SessionConfig>(this.STORAGE_KEY);
         
         const defaultConfig: SessionConfig = {
-            model: 'gpt-o4',
+            model: '',
             agent: 'Ask'
         };
         
@@ -21,9 +21,14 @@ export class SessionConfigService implements ISessionConfigService{
             return defaultConfig;
         }
         
+        let agent = config.agent ?? defaultConfig.agent;
+        if (agent === 'Editor') {
+            agent = 'Edit';
+        }
+
         return {
             model: config.model ?? defaultConfig.model,
-            agent: config.agent ?? defaultConfig.agent
+            agent
         };
     }
     async setSessionConfig(message:any){

@@ -10,6 +10,7 @@ export interface IChatService {
     sendMessageStream(
         messages: ChatCompletionMessageParam[],
         model: string,
-        onChunk: (chunk: string) => void
-    ): Promise<string> 
+        onChunk: (chunk: string) => void,
+        signal?: AbortSignal
+    ): Promise<string>
 }

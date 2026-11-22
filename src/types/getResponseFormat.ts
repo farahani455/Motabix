@@ -1,8 +1,9 @@
 import { ResponseFormat } from "./response-format-type";
+import { isAskMode } from "../utils/isAskMode";
 
 export function getResponseFormat(agent: string): ResponseFormat |undefined{
-  // برای agent=Ask فقط توضیحات میخوایم
-  if (agent === 'Ask') {
+  // Ask: plain chat, no JSON schema / tools
+  if (isAskMode(agent)) {
     return undefined;
   }else{
         return {

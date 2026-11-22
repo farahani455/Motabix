@@ -83,6 +83,16 @@ body {
     text-align: right;
 }
 
+.ai-bubble.ai-bubble-error {
+    white-space: pre-wrap;
+    color: var(--vscode-errorForeground, #f48771);
+    border: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #f48771) 35%, transparent);
+}
+
+.ai-bubble.ai-bubble-limit {
+    white-space: pre-wrap;
+}
+
 .composer {
     display: flex;
     flex-direction: column;
@@ -219,13 +229,23 @@ textarea:focus,
 }
 
 .agent-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 8px 12px;
     cursor: pointer;
+    font-size: 13px;
+    color: var(--vscode-dropdown-foreground);
     transition: background-color 0.15s;
 }
 
 .agent-option:hover {
     background: var(--vscode-list-hoverBackground);
+}
+
+.agent-option .codicon {
+    font-size: 14px;
+    color: var(--vscode-textLink-foreground);
 }
 
 .agent-option:first-child {
@@ -281,8 +301,34 @@ button {
     color: var(--vscode-button-foreground);
 }
 
+.stop-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+    color: var(--vscode-errorForeground, #f48771);
+    font-size: x-large;
+    transition: background-color 0.14s ease, transform 0.14s ease, opacity 0.14s ease;
+}
+
+.stop-button.hidden {
+    display: none;
+}
+
+.stop-button:disabled {
+    opacity: 0.45;
+    cursor: default;
+    transform: none;
+}
+
 .icon-button:hover,
-.send-button:hover {
+.send-button:hover,
+.stop-button:hover:not(:disabled) {
     transform: translateY(-1px);
 }
 
@@ -292,6 +338,12 @@ button {
 
 .send-button:hover {
     background: var(--vscode-button-hoverBackground);
+}
+
+.send-button:disabled {
+    opacity: 0.55;
+    cursor: default;
+    transform: none;
 }
 
 
@@ -532,81 +584,132 @@ pre code br:last-child{
 
   
 
-/* Response Action Buttons */
+/* Decision actions (Accept / Reject) */
 .response-actions {
     display: flex;
-    gap: 10px;
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid var(--vscode-panel-border);
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent);
     justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
-.response-action-btn {
-    display: flex;
+.decision-btn {
+    display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 16px;
-    border: none;
-    border-radius: 4px;
-    font-size: 13px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid var(--vscode-button-border, transparent);
+    font-size: 12px;
     font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
     font-family: var(--vscode-font-family);
+    cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
 
-.response-action-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
+.decision-btn .codicon {
+    font-size: 13px;
 }
 
-.response-action-btn .codicon {
-    font-size: 14px;
+.decision-btn:disabled {
+    cursor: default;
+    opacity: 0.55;
 }
 
-/* Accept Button - Green */
-.accept-btn {
-    background-color: #28a745;
-    color: #ffffff;
-    border: 1px solid #28a745;
+.decision-reject {
+    background: transparent;
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-panel-border);
 }
 
-.accept-btn:hover:not(:disabled) {
-    background-color: #218838;
-    border-color: #1e7e34;
-    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+.decision-reject:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.16));
 }
 
-.accept-btn:active:not(:disabled) {
-    background-color: #1e7e34;
-    transform: translateY(1px);
+.decision-accept {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: transparent;
 }
 
-.accept-btn.accepted {
-    background-color: #1e7e34;
-    border-color: #1c7430;
+.decision-accept:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
 }
 
-/* Reject Button - Red */
-.reject-btn {
-    background-color: #dc3545;
-    color: #ffffff;
-    border: 1px solid #dc3545;
+.decision-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
 }
 
-.reject-btn:hover:not(:disabled) {
-    background-color: #c82333;
-    border-color: #bd2130;
-    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+.decision-status-accepted {
+    color: var(--vscode-testing-iconPassed, #3fb950);
 }
 
-.reject-btn:active:not(:disabled) {
-    background-color: #bd2130;
-    transform: translateY(1px);
+.decision-status-rejected,
+.decision-status-error {
+    color: var(--vscode-errorForeground, #f48771);
 }
 
-.reject-btn.rejected {
-    background-color: #bd2130;
-    border-color: #b21f2d;
+.edit-proposal-card {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-input-background));
+}
+
+.edit-proposal-meta {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.edit-proposal-meta > .codicon {
+    margin-top: 2px;
+    color: var(--vscode-textLink-foreground);
+}
+
+.edit-proposal-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+}
+
+.edit-proposal-path {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    word-break: break-all;
+}
+
+.edit-proposal-hint {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.9;
+}
+
+.ai-bubble-content {
+    min-width: 0;
+}
+
+.edit-proposal-actions {
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+/* Legacy class names kept for older bubbles */
+.response-action-btn {
+    display: none;
+}
+
+.hidden {
+    display: none !important;
 }

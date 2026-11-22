@@ -7,11 +7,12 @@ import { ChatService } from './services/ChatService';
 import { MessageRouter } from './views/MessageRouter';
 import { SessionConfigRouter } from './views/SessionConfigRouter';
 import { OpenAIClientFactory } from './services/OpenAIClientFactory';
-import OpenAI from 'openai';
 import { MessageHandler } from './handlers/MessageHandler';
 import { SendMessageCommand } from './handlers/SendMessageCommand';
 import { OpenSettingsCommand } from './handlers/OpenSettingsCommand';
 import {ClearChatHistory} from './handlers/ClearChatHistory';
+import { ReadyCommand } from './handlers/ReadyCommand';
+import { StopGenerationCommand } from './handlers/StopGenerationCommand';
 
 import { ChatHistoryService } from './services/ChatHistoryService';
 import { RenderChatHistory } from './views/RenderChatHistory';
@@ -25,40 +26,65 @@ import { ActiveDocumentManager } from './handlers/ActiveDocumentManager';
 import { NotifHandlerService } from './services/NotifHandlerService';
 import { CodeHistoryService } from './services/CodeHistoryService';
 import { EditorService } from './services/EditorService';
+import { MotabixSettingsService } from './services/MotabixSettingsService';
+import { ProviderConnectionService } from './services/ProviderConnectionService';
+import { AgentRunLock } from './services/AgentRunLock';
+import {
+    EditProposalContentProvider,
+    EditProposalStore
+} from './agent/EditProposalStore';
+import { EditProposalCommands } from './handlers/EditProposalCommands';
 
 export function activate(context: vscode.ExtensionContext) {
-    const client:OpenAI = new OpenAIClientFactory().getClient();
     const chatHistoryService= new ChatHistoryService(context);
     const sessionConfigService=new SessionConfigService(context);
-    const chatService= new ChatService(client);
+    const appSettingsService=new MotabixSettingsService(context);
+    const clientFactory = new OpenAIClientFactory(appSettingsService);
+    const providerConnectionService=new ProviderConnectionService(appSettingsService);
+    const chatService= new ChatService(clientFactory);
+    const agentRunLock = new AgentRunLock();
+    const editProposalStore = new EditProposalStore();
     const messageHandler = new MessageHandler();
     const renderchatHistory:RenderChatHistory=new RenderChatHistory(chatHistoryService);
     const diffService:DiffService=new DiffService();
     const notifHandler:NotifHandlerService= NotifHandlerService.getInstance();
     const editorService:EditorService= new EditorService(notifHandler);
-    const codeHistory:CodeHistoryService= new CodeHistoryService(context);  
+    const codeHistory:CodeHistoryService= new CodeHistoryService(context);
+    const activeDocManager = new ActiveDocumentManager();
     messageHandler.register("sendMessage", new SendMessageCommand(
         chatService,
         chatHistoryService,
         diffService,
         notifHandler,context,
         editorService,
-        codeHistory
+        codeHistory,
+        agentRunLock,
+        activeDocManager,
+        appSettingsService,
+        editProposalStore
     ));
-    messageHandler.register("openSettings", new OpenSettingsCommand());
+    messageHandler.register("openSettings", new OpenSettingsCommand(appSettingsService));
+    messageHandler.register("getAppSettings", appSettingsService);
+    messageHandler.register("saveAppSettings", appSettingsService);
+    messageHandler.register("testConnection", providerConnectionService);
+    messageHandler.register("listModels", providerConnectionService);
     messageHandler.register("clearHistory", new ClearChatHistory(chatHistoryService));
+    messageHandler.register("ready", new ReadyCommand(chatHistoryService, sessionConfigService));
+    messageHandler.register("stopGeneration", new StopGenerationCommand(agentRunLock));
     messageHandler.register("setSessionConfig",sessionConfigService);
     messageHandler.register('copyCode', new CopyHandlerService());
     messageHandler.register('insertCode', new InsertCodeHandlerService());
     messageHandler.register('browseProject',new BrowseContentService());
     messageHandler.register('changeCodeMessage',new ChangeManagementCommands(context,diffService,chatHistoryService));
+    const editProposalCommands = new EditProposalCommands(editProposalStore);
+    messageHandler.register('acceptEditProposal', editProposalCommands);
+    messageHandler.register('rejectEditProposal', editProposalCommands);
 
 
     const sessionConfigRouter=new SessionConfigRouter(sessionConfigService);
 
     const messageRouter= new MessageRouter(messageHandler);
     
-    const activeDocManager = new ActiveDocumentManager();
     const provider = new MotabixViewProvider(context,messageRouter,renderchatHistory,sessionConfigRouter,activeDocManager);
 
     
@@ -72,8 +98,13 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('motabix.chatView', provider),
         openInRightSidebarCommand,
-        diffService  // ← این خط رو اضافه کنید
-    );}
+        diffService,
+        vscode.workspace.registerTextDocumentContentProvider(
+            EditProposalStore.scheme,
+            new EditProposalContentProvider(editProposalStore)
+        )
+    );
+}
 
   
 

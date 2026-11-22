@@ -25,3 +25,9 @@ npm-debug.log*
 *.tsbuildinfo
 
 AGENT_README.md
+
+# Private local docs (not for git)
+docs.private/
+
+# Cursor local config/rules
+.cursor/

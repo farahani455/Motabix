@@ -13,7 +13,7 @@ export class MessageHandler {
              console.warn(`Unknown command received: ${message.command}`);
             return
         }
-        command.execute(webview,message);
+        await command.execute(webview, message);
     }
 
 }

@@ -7,6 +7,7 @@
                <link href="{mediaUri}/hljs/vs2015.min.css" rel="stylesheet"/>
                <link rel="stylesheet" href="{mediaUri}/hljs/github-dark.min.css">
               <link href="{mediaUri}/motabix.css" rel="stylesheet"/>
+              <link href="{mediaUri}/settings.css" rel="stylesheet"/>
           </head>
           <body>
               <div class="app-shell">
@@ -21,6 +22,71 @@
                         </button>
                       </div>
                   </header>
+                  <div id="settingsPanel" class="settings-panel hidden">
+                    <div class="settings-header">
+                        <button id="settingsBack" class="icon-button" type="button" title="Back to chat" aria-label="Back to chat">
+                            <span class="codicon codicon-arrow-left" aria-hidden="true"></span>
+                        </button>
+                        <div class="settings-title">Settings</div>
+                    </div>
+
+                    <div class="settings-card">
+                        <div class="settings-section-label">Provider</div>
+                        <div class="settings-field">
+                            <label for="settingsProvider">Backend</label>
+                            <select id="settingsProvider">
+                                <option value="ollama" selected>Local (Ollama)</option>
+                                <option value="motabix-router">MotabixRouter</option>
+                            </select>
+                        </div>
+                        <div id="ollamaSettings" class="settings-field-group">
+                            <div class="settings-field">
+                                <label for="ollamaBaseURL">Ollama address</label>
+                                <input id="ollamaBaseURL" type="text" value="http://127.0.0.1:11434" />
+                            </div>
+                        </div>
+                        <div id="routerSettings" class="settings-field-group hidden">
+                            <div class="settings-field">
+                                <label for="routerBaseURL">MotabixRouter address</label>
+                                <input id="routerBaseURL" type="text" value="http://127.0.0.1:8787" />
+                            </div>
+                            <div class="settings-field">
+                                <label for="routerApiKey">API Key</label>
+                                <input id="routerApiKey" type="password" value="" placeholder="Required for MotabixRouter" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-card">
+                        <div class="settings-section-label">Agent</div>
+                        <div class="settings-field">
+                            <label for="runCommandPermission">run_command permission</label>
+                            <select id="runCommandPermission">
+                                <option value="ask" selected>With approval</option>
+                                <option value="allow">Without approval</option>
+                            </select>
+                        </div>
+                        <div class="settings-field">
+                            <label for="pathScope">read_file / edit_file path scope</label>
+                            <select id="pathScope">
+                                <option value="workspace" selected>Workspace only</option>
+                                <option value="unrestricted">Any path</option>
+                            </select>
+                        </div>
+                        <div class="settings-field">
+                            <label for="runCommandCwd">run_command working directory</label>
+                            <input id="runCommandCwd" type="text" value="" placeholder="Leave empty for workspace root" />
+                        </div>
+                    </div>
+
+                    <div class="settings-actions">
+                        <div class="settings-action-row">
+                            <button id="testConnection" class="settings-secondary-button" type="button">Test connection</button>
+                            <button id="saveSettings" class="settings-save-button" type="button">Save</button>
+                        </div>
+                        <p id="settingsStatus" class="settings-status"></p>
+                    </div>
+                  </div>
 
                   <div class="messages" id="messages"></div>
 
@@ -53,30 +119,33 @@
                         <div class="model-selector-wrapper">
                             <button id="model" class="model-button" type="button" title="Select model">
                                 <span class="codicon codicon-sparkle"></span>
-                                <span class="model-label" id="model-label" data-model="gpt-4o">gpt-4o</span>
+                                <span class="model-label" id="model-label" data-model="">No models</span>
                                 <span class="codicon codicon-chevron-down"></span>
                             </button>
-                            <div id="modelDropdown" class="model-dropdown hidden">
-                                <div class="model-option" data-model="gpt-4o">gpt-4o</div>
-                                <div class="model-option" data-model="gpt-5.3-codex">gpt-5.3-codex</div>
-                                <div class="model-option" data-model="gpt-5.3-codex-spark">gpt-5.3-codex-spark</div>
-                                <div class="model-option" data-model="gemini-2.5-pro">gemini-2.5-pro</div>
-                                <div class="model-option" data-model="claude-sonnet-4-6">claude-sonnet-4-6</div>
-                                <div class="model-option" data-model="gapgpt-qwen-3.5">gapgpt-qwen-3.5</div>
-                            </div>
+                            <div id="modelDropdown" class="model-dropdown hidden"></div>
                         </div>
                         <div class="agent-selector-wrapper">
-                            <button id="setAgent" class="agent-button" type="button" title="Set Agent">
-                                <span class="codicon codicon-agent"></span>
+                            <button id="setAgent" class="agent-button" type="button" title="Mode">
+                                <span class="codicon codicon-comment" id="agent-icon" aria-hidden="true"></span>
                                 <span class="agent-label" id="agent-label" data-agent="Ask">Ask</span>
                                 <span class="codicon codicon-chevron-down"></span>
                             </button>
                             <div id="agentDropdown" class="agent-dropdown hidden">
-                                <div class="agent-option" data-agent="Ask">Ask</div>
-                                <div class="agent-option" data-agent="Editor">Editor</div>
+                                <div class="agent-option" data-agent="Ask">
+                                    <span class="codicon codicon-comment" aria-hidden="true"></span>Ask
+                                </div>
+                                <div class="agent-option" data-agent="Edit">
+                                    <span class="codicon codicon-edit" aria-hidden="true"></span>Edit
+                                </div>
+                                <div class="agent-option" data-agent="Edit Automatically">
+                                    <span class="codicon codicon-run-all" aria-hidden="true"></span>Edit Automatically
+                                </div>
                             </div>
                         </div>
                         </div>
+                        <button id="stopButton" class="stop-button hidden" type="button" aria-label="Stop" title="Stop" disabled>
+                            <span aria-hidden="true" class="codicon codicon-debug-stop"></span>
+                        </button>
                         <button id="sendButton" class="send-button" type="button" aria-label="Send message" title="Send">
                             <span aria-hidden="true" class="codicon codicon-send"></span>
                         </button>
