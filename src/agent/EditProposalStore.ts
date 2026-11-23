@@ -48,8 +48,10 @@ export class EditProposalStore {
     }
 
     beforeUri(id: string): vscode.Uri {
+        // Include authority so VS Code treats these as stable virtual docs.
         return vscode.Uri.from({
             scheme: EditProposalStore.scheme,
+            authority: 'proposal',
             path: `/${id}/before`,
             query: `side=before`
         });
@@ -58,6 +60,7 @@ export class EditProposalStore {
     afterUri(id: string): vscode.Uri {
         return vscode.Uri.from({
             scheme: EditProposalStore.scheme,
+            authority: 'proposal',
             path: `/${id}/after`,
             query: `side=after`
         });
@@ -67,6 +70,7 @@ export class EditProposalStore {
         const id = uri.path.split('/').filter(Boolean)[0];
         const proposal = id ? this.proposals.get(id) : undefined;
         if (!proposal) {
+            console.log(`[Motabix][edit_file] content provider miss uri=${uri.toString()}`);
             return '';
         }
         const side = new URLSearchParams(uri.query).get('side');
@@ -75,7 +79,7 @@ export class EditProposalStore {
 
     titleFor(proposal: EditProposal): string {
         const name = path.basename(proposal.targetPath);
-        return `${name} (Motabix proposal)`;
+        return `${name} (Motabix)`;
     }
 }
 

@@ -420,7 +420,12 @@ function handleWindowMessage(event) {
             addAssistantMessage(currentContent,item.Id,(item.language??"en"),false);
             formatAssistResponse(item.Id);
             highlightAssistResponse(item.Id);
-            showActionButton(item.Id, item.codeAction??'accepted');
+            // History must never show live Accept/Reject — proposals expire with the session.
+            // Only a read-only status chip when we know the past decision.
+            const pastAction = item.codeAction;
+            if (pastAction === 'accepted' || pastAction === 'rejected') {
+                showActionButton(item.Id, pastAction, { interactive: false });
+            }
           }
       }
 
@@ -585,13 +590,13 @@ function handleWindowMessage(event) {
         });
     }
 
-    function showActionButton(requestId, status = 'pending'){
+    function showActionButton(requestId, status = 'pending', options = {}){
         let bubble = document.querySelector(`[data-newid="${requestId}"]`);
         if (!bubble) {
             return;
         }
 
-        const existingActions = bubble.querySelector('.response-actions');
+        const existingActions = bubble.querySelector('.response-actions:not(.edit-proposal-actions)');
         if (existingActions) {
             existingActions.remove();
         }
@@ -600,7 +605,10 @@ function handleWindowMessage(event) {
         actionButtons.className = 'response-actions';
         actionButtons.innerHTML = buildDecisionButtonsHtml(status, 'legacy');
         bubble.appendChild(actionButtons);
-        bindLegacyDecisionButtons(actionButtons);
+        // History / resolved states: status text only — never bind Accept/Reject.
+        if (options.interactive !== false && status === 'pending') {
+            bindLegacyDecisionButtons(actionButtons);
+        }
     }
 
     function buildDecisionButtonsHtml(status, kind) {
@@ -673,36 +681,72 @@ function handleWindowMessage(event) {
         }
 
         const fileName = (message.path || '').split(/[/\\]/).pop() || message.path || 'file';
+        const autoApplied = !!message.autoApplied;
         const card = document.createElement('div');
-        card.className = 'edit-proposal-card';
+        card.className = autoApplied
+            ? 'edit-proposal-card edit-proposal-card-applied'
+            : 'edit-proposal-card';
         card.setAttribute('data-proposal-id', message.proposalId);
-        card.innerHTML = `
-            <div class="edit-proposal-meta">
-                <span class="codicon codicon-diff"></span>
-                <div class="edit-proposal-copy">
-                    <div class="edit-proposal-title">${message.isNewFile ? 'New file proposal' : 'Edit proposal'}</div>
-                    <div class="edit-proposal-path">${escapeHtml(fileName)}</div>
-                    <div class="edit-proposal-hint">Accept writes the file to disk. Reject discards it.</div>
-                </div>
-            </div>
-            <div class="edit-proposal-actions response-actions">
-                ${buildDecisionButtonsHtml('pending', 'proposal')}
-            </div>
-        `;
-        bubble.appendChild(card);
 
-        card.querySelectorAll('[data-action]').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const action = btn.getAttribute('data-action');
-                const proposalId = card.getAttribute('data-proposal-id');
-                if (action === 'accept') {
-                    vscode.postMessage({ command: 'acceptEditProposal', proposalId });
-                } else if (action === 'reject') {
-                    vscode.postMessage({ command: 'rejectEditProposal', proposalId });
+        if (autoApplied) {
+            card.setAttribute('role', 'button');
+            card.setAttribute('tabindex', '0');
+            card.title = 'Open Diff';
+            card.innerHTML = `
+                <div class="edit-proposal-meta">
+                    <span class="codicon codicon-diff"></span>
+                    <div class="edit-proposal-copy">
+                        <div class="edit-proposal-title">${message.isNewFile ? 'File created' : 'File edited'}</div>
+                        <div class="edit-proposal-path">${escapeHtml(fileName)}</div>
+                        <div class="edit-proposal-hint">Click to reopen Diff</div>
+                    </div>
+                    <span class="codicon codicon-chevron-right edit-proposal-chevron"></span>
+                </div>
+            `;
+            const openDiff = () => {
+                vscode.postMessage({
+                    command: 'openEditProposalDiff',
+                    proposalId: message.proposalId
+                });
+            };
+            card.addEventListener('click', openDiff);
+            card.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openDiff();
                 }
             });
-        });
+        } else {
+            const hint = message.shrinkBlocked
+                ? 'Blocked auto-overwrite (content too small). Diff is open — Accept only if you want this.'
+                : 'Accept writes the file to disk. Reject discards it.';
+            card.innerHTML = `
+                <div class="edit-proposal-meta">
+                    <span class="codicon codicon-diff"></span>
+                    <div class="edit-proposal-copy">
+                        <div class="edit-proposal-title">${message.isNewFile ? 'New file proposal' : 'Edit proposal'}</div>
+                        <div class="edit-proposal-path">${escapeHtml(fileName)}</div>
+                        <div class="edit-proposal-hint">${hint}</div>
+                    </div>
+                </div>
+                <div class="edit-proposal-actions response-actions">
+                    ${buildDecisionButtonsHtml('pending', 'proposal')}
+                </div>
+            `;
+            card.querySelectorAll('[data-action]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const action = btn.getAttribute('data-action');
+                    const proposalId = card.getAttribute('data-proposal-id');
+                    if (action === 'accept') {
+                        vscode.postMessage({ command: 'acceptEditProposal', proposalId });
+                    } else if (action === 'reject') {
+                        vscode.postMessage({ command: 'rejectEditProposal', proposalId });
+                    }
+                });
+            });
+        }
 
+        bubble.appendChild(card);
         elements.messages.scrollTop = elements.messages.scrollHeight;
     }
 
@@ -848,54 +892,33 @@ function handleWindowMessage(event) {
 
     }
 
+    function getCodeBlockSource(button) {
+        const codeBlock = button.closest('.code-block-wrapper')?.querySelector('code');
+        if (!codeBlock) {
+            return '';
+        }
+        // getAttribute already returns decoded entities (&lt; → <).
+        // Never assign that string to innerHTML — the browser would parse real tags
+        // and copy/insert would lose <> or truncate mid-tag.
+        const fromAttr = codeBlock.getAttribute('data-code');
+        if (fromAttr != null && fromAttr.length > 0) {
+            return fromAttr;
+        }
+        return codeBlock.textContent || '';
+    }
+
     function copyCode(button) {
-        const codeBlock = button.closest('.code-block-wrapper').querySelector('code');
-        const code = codeBlock.getAttribute('data-code');
-        
-        // Unescape HTML entities
-        const textarea = document.createElement('textarea');
-        textarea.innerHTML = code;
-        const decodedCode = textarea.value;
-        
         vscode.postMessage({
             command: 'copyCode',
-            code: decodedCode
+            code: getCodeBlockSource(button)
         });
-        
-        // Visual feedback
-        // const originalText = button.innerHTML;
-        // button.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 2l-7.5 7.5-3.5-3.5-1.5 1.5 5 5 9-9z"/></svg> Copied!';
-        // button.classList.add('success');
-        
-        // setTimeout(() => {
-        //     button.innerHTML = originalText;
-        //     button.classList.remove('success');
-        // }, 2000);
     }
 
     function insertCode(button) {
-        const codeBlock = button.closest('.code-block-wrapper').querySelector('code');
-        const code = codeBlock.getAttribute('data-code');
-        
-        // Unescape HTML entities
-        const textarea = document.createElement('textarea');
-        textarea.innerHTML = code;
-        const decodedCode = textarea.value;
-        
         vscode.postMessage({
             command: 'insertCode',
-            code: decodedCode
+            code: getCodeBlockSource(button)
         });
-        
-        // Visual feedback
-        // const originalText = button.innerHTML;
-        // button.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 2l-7.5 7.5-3.5-3.5-1.5 1.5 5 5 9-9z"/></svg> Inserted!';
-        // button.classList.add('success');
-        
-        // setTimeout(() => {
-        //     button.innerHTML = originalText;
-        //     button.classList.remove('success');
-        // }, 2000);
     }
     function generateNewId() {
         const timestamp = Date.now().toString(36);

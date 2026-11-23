@@ -1,5 +1,8 @@
+/** Normalize chat/webview code payloads for the editor (keep real < > in source). */
 export function formatResponse(input: string): string {
-    // Sanitize input to prevent injection attacks
-    const sanitizedInput = input.replace(/[<>]/g, '');
-    return sanitizedInput.replace(/<br>/ig, '\n');
+    if (typeof input !== 'string') {
+        return '';
+    }
+    // Only normalize break tags that may leak from HTML formatting — never strip <>.
+    return input.replace(/<br\s*\/?>/gi, '\n');
 }

@@ -1,5 +1,7 @@
 import { ISessionConfigService, SessionConfig } from "./ISessionConfigService";
 import * as vscode from 'vscode';
+import { normalizeAgentMode } from '../utils/isAskMode';
+
 export class SessionConfigService implements ISessionConfigService{
     private readonly STORAGE_KEY='motabix.config'
 
@@ -20,21 +22,18 @@ export class SessionConfigService implements ISessionConfigService{
         if (!config) {
             return defaultConfig;
         }
-        
-        let agent = config.agent ?? defaultConfig.agent;
-        if (agent === 'Editor') {
-            agent = 'Edit';
-        }
 
         return {
             model: config.model ?? defaultConfig.model,
-            agent
+            agent: normalizeAgentMode(config.agent ?? defaultConfig.agent)
         };
     }
     async setSessionConfig(message:any){
         const config =this.getSessionConfig();
         config.model=message.model??config.model;
-        config.agent=message.agent??config.agent;
+        if (message.agent !== undefined && message.agent !== null) {
+            config.agent = normalizeAgentMode(message.agent);
+        }
         await this.context.globalState.update(this.STORAGE_KEY,config);
     }
 

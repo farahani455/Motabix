@@ -1,8 +1,14 @@
 import { MotabixSettingsService } from '../services/MotabixSettingsService';
+import { isEditAutomatically } from '../utils/isAskMode';
 import { isMotabixToolName } from './motabixTools';
+import { sanitizeEditFileArgs } from './sanitizeEditFileArgs';
 import { executeReadFile } from './tools/readFileTool';
 import { executeEditFile } from './tools/editFileTool';
 import { EditProposalStore } from './EditProposalStore';
+
+export type ToolExecuteContext = {
+    agentMode?: string;
+};
 
 /** Dispatches agent tools. read_file + edit_file(diff) are live; run_command stays stub until T8. */
 export class ToolExecutor {
@@ -11,7 +17,11 @@ export class ToolExecutor {
         private readonly proposalStore: EditProposalStore
     ) {}
 
-    async execute(name: string, rawArguments: string): Promise<string> {
+    async execute(
+        name: string,
+        rawArguments: string,
+        context: ToolExecuteContext = {}
+    ): Promise<string> {
         let args: Record<string, unknown> = {};
         try {
             args = rawArguments?.trim() ? JSON.parse(rawArguments) : {};
@@ -37,14 +47,18 @@ export class ToolExecutor {
         }
 
         if (name === 'edit_file') {
-            return executeEditFile(
-                {
-                    path: typeof args.path === 'string' ? args.path : undefined,
-                    content: typeof args.content === 'string' ? args.content : undefined
-                },
-                settings,
-                this.proposalStore
+            const autoApply = isEditAutomatically(context.agentMode);
+            const cleaned = sanitizeEditFileArgs({
+                path: typeof args.path === 'string' ? args.path : undefined,
+                content: typeof args.content === 'string' ? args.content : undefined,
+                raw: typeof args.raw === 'string' ? args.raw : undefined
+            });
+            console.log(
+                `[Motabix][edit_file] dispatch agentMode=${JSON.stringify(context.agentMode)} ` +
+                    `autoApply=${autoApply} path=${JSON.stringify(cleaned.path)} ` +
+                    `contentLength=${cleaned.content?.length ?? 0}`
             );
+            return executeEditFile(cleaned, settings, this.proposalStore, { autoApply });
         }
 
         return JSON.stringify({

@@ -4,7 +4,8 @@ import type {
 } from 'openai/resources/chat/completions';
 import { AGENT_MAX_STEPS } from './motabixTools';
 import { ToolExecutor } from './ToolExecutor';
-import { ChatService, ChatWithToolsResult } from '../services/ChatService';
+import { ChatService, ChatToolCall, ChatWithToolsResult } from '../services/ChatService';
+import { isEditAutomatically } from '../utils/isAskMode';
 
 export type AgentLoopStepInfo = {
     step: number;
@@ -32,6 +33,7 @@ export class AgentLoopService {
         messages: ChatCompletionMessageParam[];
         model: string;
         tools: ChatCompletionTool[];
+        agentMode?: string;
         signal?: AbortSignal;
         onStep?: (info: AgentLoopStepInfo) => void;
         onHitMaxSteps?: (maxSteps: number) => void;
@@ -41,9 +43,13 @@ export class AgentLoopService {
         const messages = [...options.messages];
         let steps = 0;
         let nudgedForMissingTools = false;
+        /** One-shot: force a tool call on the next completion only. */
+        let forceToolsNextRound = true;
+        const initialUserWantsEdit = userAskedForFileEdit(latestUserText(messages));
 
         console.log(
-            `[Motabix][agent] start model=${options.model} maxSteps=${maxSteps} tools=${options.tools.length}`
+            `[Motabix][agent] start model=${options.model} agent=${options.agentMode ?? '(none)'} ` +
+                `maxSteps=${maxSteps} tools=${options.tools.length} wantsEdit=${initialUserWantsEdit}`
         );
 
         for (let step = 1; step <= maxSteps; step++) {
@@ -57,7 +63,18 @@ export class AgentLoopService {
                 };
             }
 
-            console.log(`[Motabix][agent] round ${step}/${maxSteps} requesting completion…`);
+            // Local models (qwen etc.) often ignore tools / paste markdown to replace manually.
+            // When the user asked for an edit, force edit_file specifically on the first/nudge round.
+            const toolChoice = !forceToolsNextRound
+                ? ('auto' as const)
+                : initialUserWantsEdit
+                  ? ({ type: 'function' as const, function: { name: 'edit_file' } })
+                  : ('required' as const);
+            forceToolsNextRound = false;
+            console.log(
+                `[Motabix][agent] round ${step}/${maxSteps} requesting completion… ` +
+                    `tool_choice=${JSON.stringify(toolChoice)}`
+            );
 
             let completion: ChatWithToolsResult;
             try {
@@ -65,7 +82,8 @@ export class AgentLoopService {
                     messages,
                     options.model,
                     options.tools,
-                    options.signal
+                    options.signal,
+                    toolChoice
                 );
             } catch (error) {
                 if (options.signal?.aborted) {
@@ -89,17 +107,36 @@ export class AgentLoopService {
             if (!completion.toolCalls.length) {
                 const prose = completion.content?.trim() || '';
                 const latestUser = latestUserText(messages);
-                // Only nudge when the USER asked to create/edit — not when they asked
-                // how to run / explain and the model regurgitated a fake confirm template.
-                if (
-                    steps === 0 &&
-                    !nudgedForMissingTools &&
-                    userAskedForFileEdit(latestUser) &&
-                    looksLikeFakeEditClaim(prose)
-                ) {
-                    nudgedForMissingTools = true;
+                const wantsEdit =
+                    userAskedForFileEdit(latestUser) || looksLikeCodeDumpInsteadOfTool(prose);
+
+                // qwen often pastes a full file in markdown instead of calling edit_file.
+                const recovered = wantsEdit
+                    ? recoverEditFileFromMarkdown(prose, latestUser)
+                    : null;
+                if (recovered) {
+                    let recoveredPath = '(unknown)';
+                    try {
+                        recoveredPath = String(
+                            (JSON.parse(recovered.arguments) as { path?: string }).path ?? '(unknown)'
+                        );
+                    } catch {
+                        // ignore
+                    }
                     console.log(
-                        `[Motabix][agent] round ${step}: prose claimed an edit without tools — nudging once`
+                        `[Motabix][agent] recovered edit_file from markdown fence path=${recoveredPath}`
+                    );
+                    completion = {
+                        content: null,
+                        toolCalls: [recovered],
+                        finishReason: completion.finishReason
+                    };
+                } else if (steps === 0 && !nudgedForMissingTools && wantsEdit) {
+                    nudgedForMissingTools = true;
+                    forceToolsNextRound = true;
+                    console.log(
+                        `[Motabix][agent] round ${step}: no tools but user asked for a file edit — nudging once` +
+                            (isEditAutomatically(options.agentMode) ? ' (Edit Automatically)' : '')
                     );
                     if (prose) {
                         messages.push({
@@ -110,25 +147,24 @@ export class AgentLoopService {
                     messages.push({
                         role: 'user',
                         content:
-                            'SYSTEM: You described a file create/edit but did not call any tool. ' +
-                            'Call edit_file now with path and full content. ' +
-                            'Do not ask the user to confirm in text — Motabix shows Accept/Reject after edit_file. ' +
-                            'Never say تصویرت or ask to confirm an image.'
+                            'SYSTEM: Do NOT paste code for the user to copy/replace. ' +
+                            'Call edit_file NOW with the full fixed file content. ' +
+                            'Arguments: {"path":"<file path>","content":"<entire file>"}. ' +
+                            'If an attached file path is in the user message, use that path.'
                     });
-                    // Retry this round budget slot without counting a tool step.
                     step -= 1;
                     continue;
+                } else {
+                    console.log(
+                        `[Motabix][agent] no tool calls — ending loop. stepsDone=${steps} wantsEdit=${wantsEdit}`
+                    );
+                    return {
+                        finalText: sanitizeAssistantProse(prose),
+                        steps,
+                        stopped: false,
+                        hitMaxSteps: false
+                    };
                 }
-
-                console.log(
-                    `[Motabix][agent] no tool calls — ending loop. stepsDone=${steps}`
-                );
-                return {
-                    finalText: sanitizeAssistantProse(prose),
-                    steps,
-                    stopped: false,
-                    hitMaxSteps: false
-                };
             }
 
             steps = step;
@@ -179,7 +215,9 @@ export class AgentLoopService {
                         editFileSeen = true;
                     }
                     // read_file: no per-step cap — every call is executed.
-                    result = await this.toolExecutor.execute(call.name, call.arguments);
+                    result = await this.toolExecutor.execute(call.name, call.arguments, {
+                        agentMode: options.agentMode
+                    });
                 }
 
                 console.log(
@@ -258,16 +296,122 @@ function userAskedForFileEdit(userText: string): boolean {
         return false;
     }
     // How-to-run / explain questions must not trigger edit nudges.
+    // Strip attached-files dump when checking intent.
+    const intent = userText.split(/\nAttached files:/)[0] ?? userText;
+    const asksEdit =
+        /اضافه|بساز|ایجاد|درست|اصلاح|رفع|فیکس|تغییر|بنویس|اعمال|عوض|سینتکس|syntax|error|bug|باگ|غلط|خراب|create\b|add (?:a )?file|new file|write (?:a )?file|edit\b|modify\b|update\b|refactor|fix\b|patch\b/i.test(
+            intent
+        );
     if (
-        /چ(ی|ه)?\s*کار|چیکار|چطور|اجرا|run\b|how (?:do|can|to)|explain|توضیح/i.test(
-            userText
-        )
+        /چ(ی|ه)?\s*کار|چیکار|چطور اجرا|اجراش|run\b|how (?:do|can|to)|explain|توضیح بده/i.test(
+            intent
+        ) &&
+        !asksEdit
     ) {
         return false;
     }
-    return /اضافه کن|بساز|ایجاد|درست کن|تغییر بده|بنویس|create\b|add (?:a )?file|new file|write (?:a )?file|edit\b|modify\b|update\b/i.test(
-        userText
-    );
+    // Attached source file usually means the user wants work on that file in Edit modes.
+    if (/\nFile:\s*.+\.[A-Za-z0-9]+\s*\n/.test(userText) && asksEdit) {
+        return true;
+    }
+    return asksEdit;
+}
+
+function looksLikeCodeDumpInsteadOfTool(text: string): boolean {
+    if (!text || text.length < 80) {
+        return false;
+    }
+    const hasFence = /```[\s\S]{40,}```/.test(text);
+    const replacey =
+        /replace|ریپلیس|جایگزین|کپی کن|paste|copy (?:this|the)|entire (?:file|code)|کل (?:فایل|کد)|به جاش|این کد رو/i.test(
+            text
+        );
+    return hasFence && (replacey || text.length > 400);
+}
+
+function attachedFilePathFromUser(userText: string): string | undefined {
+    const matches = [...userText.matchAll(/^File:\s*(.+)\s*$/gm)];
+    if (matches.length === 0) {
+        return undefined;
+    }
+    // Prefer the last attached file (usually Active Document / target).
+    return matches[matches.length - 1]?.[1]?.trim() || undefined;
+}
+
+function attachedFileBodyFromUser(userText: string): string | undefined {
+    const matches = [...userText.matchAll(/File:\s*.+\r?\n```[^\n]*\r?\n([\s\S]*?)```/g)];
+    if (matches.length === 0) {
+        return undefined;
+    }
+    return matches[matches.length - 1]?.[1] ?? undefined;
+}
+
+/**
+ * When the model dumps ```lang ... ``` with a nearby filename instead of edit_file,
+ * turn the largest fence into an edit_file tool call — but never a tiny fragment
+ * that would wipe an attached full file.
+ */
+function recoverEditFileFromMarkdown(
+    text: string,
+    latestUser: string
+): ChatToolCall | null {
+    if (!text) {
+        return null;
+    }
+
+    const fences = [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)];
+    if (fences.length === 0) {
+        return null;
+    }
+
+    let best = fences[0];
+    for (const fence of fences) {
+        if ((fence[2]?.length ?? 0) > (best[2]?.length ?? 0)) {
+            best = fence;
+        }
+    }
+
+    const content = (best[2] ?? '').replace(/\s+$/g, '\n');
+    if (content.trim().length < 8) {
+        return null;
+    }
+
+    const attachedBody = attachedFileBodyFromUser(latestUser);
+    if (attachedBody && attachedBody.length >= 80) {
+        const ratio = content.length / attachedBody.length;
+        if (ratio < 0.5 && attachedBody.length - content.length >= 100) {
+            console.log(
+                `[Motabix][agent] skip markdown recovery — fragment too small ` +
+                    `(fence=${content.length} attached=${attachedBody.length})`
+            );
+            return null;
+        }
+    }
+
+    const langTag = (best[1] ?? '').trim();
+    const langPath = langTag.match(/^[a-zA-Z0-9_+-]*:([^\s]+)$/);
+    const pathMatchers = [
+        langPath?.[1],
+        text.match(
+            /(?:edit_file|create|write|save|file|path|فایل)\s*[:(=]\s*[`"]?([^\s`"'<>]+\.[A-Za-z0-9]+)/i
+        )?.[1],
+        text.match(/`([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)`/)?.[1],
+        text.match(
+            /\b([A-Za-z0-9_./\\-]+\.(?:js|ts|tsx|jsx|mjs|cjs|json|css|html|md|py|go|rs|java))\b/
+        )?.[1],
+        attachedFilePathFromUser(latestUser)
+    ];
+
+    const filePath = pathMatchers.find((p) => typeof p === 'string' && p.length > 0);
+    if (!filePath) {
+        return null;
+    }
+
+    return {
+        id: `call_recovered_md_edit_file`,
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: filePath, content })
+    };
 }
 
 /**

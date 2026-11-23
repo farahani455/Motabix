@@ -665,6 +665,28 @@ pre code br:last-child{
     background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-input-background));
 }
 
+.edit-proposal-card-applied {
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.edit-proposal-card-applied:hover {
+    border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+    background: color-mix(in srgb, var(--vscode-list-hoverBackground) 70%, transparent);
+}
+
+.edit-proposal-card-applied:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+}
+
+.edit-proposal-chevron {
+    margin-left: auto;
+    margin-top: 2px;
+    opacity: 0.7;
+    color: var(--vscode-descriptionForeground);
+}
+
 .edit-proposal-meta {
     display: flex;
     align-items: flex-start;

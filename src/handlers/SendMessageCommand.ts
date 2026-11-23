@@ -11,7 +11,7 @@ import { CodeHistoryService } from '../services/CodeHistoryService';
 import { NotifHandlerService } from '../services/NotifHandlerService';
 import { filesWithContent } from '../utils/fileUtilities';
 import { AgentRunLock } from '../services/AgentRunLock';
-import { isAgentMode } from '../utils/isAskMode';
+import { isAgentMode, normalizeAgentMode } from '../utils/isAskMode';
 import { ActiveDocumentManager } from './ActiveDocumentManager';
 import { ChatService } from '../services/ChatService';
 import { AgentLoopService } from '../agent/AgentLoopService';
@@ -112,11 +112,12 @@ export class SendMessageCommand implements IWebviewCommand {
             attachedFiles
         );
 
+        const agentMode = normalizeAgentMode(message.agent);
         const languageHint =
             requestLang === 'fa'
                 ? 'Detected user language: Persian (Farsi). Respond in Persian.'
                 : 'Detected user language: English. Respond in English.';
-        const SYSTEM_PROMPT = `${getSystemPrompt(message.agent)}\n\n${languageHint}`;
+        const SYSTEM_PROMPT = `${getSystemPrompt(agentMode)}\n\n${languageHint}`;
         const request: ChatCompletionMessageParam[] =
             await this.chatHistoryService.buildRequestMessages(SYSTEM_PROMPT);
 
@@ -125,12 +126,20 @@ export class SendMessageCommand implements IWebviewCommand {
 
         // Only Edit / Edit Automatically may enter the agent tool loop.
         // Ask and any unknown mode stay on plain chat streaming (no tools).
-        if (!isAgentMode(message.agent)) {
+        if (!isAgentMode(agentMode)) {
             await this.runAsk(webviewView, request, model, requestId, responseId, requestLang);
             return;
         }
 
-        await this.runAgent(webviewView, request, model, requestId, responseId, requestLang);
+        await this.runAgent(
+            webviewView,
+            request,
+            model,
+            requestId,
+            responseId,
+            requestLang,
+            agentMode
+        );
     }
 
     private async runAsk(
@@ -193,8 +202,7 @@ export class SendMessageCommand implements IWebviewCommand {
                 role: 'assistant',
                 content: response,
                 timestamp: Date.now(),
-                language: detectLanguage(response),
-                codeAction: 'pending'
+                language: detectLanguage(response)
             });
         } catch (error) {
             if (isAbortError(error)) {
@@ -221,7 +229,8 @@ export class SendMessageCommand implements IWebviewCommand {
         model: string,
         requestId: string,
         responseId: string,
-        requestLang: string
+        requestLang: string,
+        agentMode: string
     ): Promise<void> {
         webviewView.webview.postMessage({
             command: 'stream-start-response',
@@ -230,11 +239,14 @@ export class SendMessageCommand implements IWebviewCommand {
         });
 
         try {
-            console.log(`[Motabix][agent] runAgent requestId=${requestId} model=${model}`);
+            console.log(
+                `[Motabix][agent] runAgent requestId=${requestId} model=${model} agent=${agentMode}`
+            );
             const result = await this.agentLoop.run({
                 messages: request,
                 model,
                 tools: MOTABIX_TOOLS,
+                agentMode,
                 signal: this.agentRunLock.getAbortSignal(),
                 onStep: (info) => {
                     console.log(
@@ -259,6 +271,9 @@ export class SendMessageCommand implements IWebviewCommand {
                                 proposalId?: string;
                                 path?: string;
                                 isNewFile?: boolean;
+                                autoApplied?: boolean;
+                                written?: boolean;
+                                shrinkBlocked?: boolean;
                             };
                             if (parsed.ok && parsed.proposalId) {
                                 webviewView.webview.postMessage({
@@ -267,7 +282,11 @@ export class SendMessageCommand implements IWebviewCommand {
                                     responseId,
                                     proposalId: parsed.proposalId,
                                     path: parsed.path,
-                                    isNewFile: !!parsed.isNewFile
+                                    isNewFile: !!parsed.isNewFile,
+                                    // If shrink was blocked, show Accept/Reject even in Auto mode.
+                                    autoApplied: !!parsed.autoApplied && !parsed.shrinkBlocked,
+                                    written: !!parsed.written,
+                                    shrinkBlocked: !!parsed.shrinkBlocked
                                 });
                             }
                         } catch {
@@ -320,8 +339,7 @@ export class SendMessageCommand implements IWebviewCommand {
                 role: 'assistant',
                 content: finalText,
                 timestamp: Date.now(),
-                language: detectLanguage(finalText),
-                codeAction: 'pending'
+                language: detectLanguage(finalText)
             });
         } catch (error) {
             if (isAbortError(error)) {

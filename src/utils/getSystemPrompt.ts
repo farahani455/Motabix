@@ -1,4 +1,7 @@
+import { normalizeAgentMode } from './isAskMode';
+
 export function getSystemPrompt(agentType: string): string {
+    agentType = normalizeAgentMode(agentType);
     const LANGUAGE_INSTRUCTION = `
 ## Language Policy
 - **Always respond in the same language as the user's question**
@@ -100,12 +103,12 @@ Known tools:
 - edit_file(path, content) — propose full-file create/replace; at most ONE edit_file per step. LIVE.
 - run_command(command) — may still be stubbed; for "how do I run?" prefer explaining the command in text
 
-### Hard rules for create / edit
-- To create or change any file you MUST call edit_file with the full file content
-- Do NOT only describe the change in chat text
-- Do NOT paste the whole file as markdown instead of calling edit_file
+### Hard rules for create / edit / fix
+- To create, change, or fix any file your FIRST action MUST be an edit_file tool call
+- Never tell the user to copy/paste/replace code manually
+- Never paste the whole fixed file as a markdown code block instead of edit_file
 - Do NOT claim the file was created or written until edit_file has returned ok
-- Do NOT ask the user to "confirm", "Accept", or "approve" in prose — after a successful edit_file, Motabix shows Accept/Reject buttons and a Diff automatically
+- After edit_file: Edit mode shows Accept/Reject; Edit Automatically writes immediately and shows a clickable Diff item
 
 When tools are done, reply with a short markdown summary only (no raw tool JSON).
 
@@ -116,5 +119,6 @@ When tools are done, reply with a short markdown summary only (no raw tool JSON)
 - Handle edge cases and errors
 `.trim();
 
+    // Keep Ask vs Edit prompts; Edit Automatically shares the editor tool prompt.
     return agentType === 'Ask' || !agentType ? ASK_PROMPT : EDITOR_PROMPT;
 }

@@ -97,7 +97,11 @@ export class ChatService implements IChatService {
         messages: ChatCompletionMessageParam[],
         model: string,
         tools: ChatCompletionTool[],
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        toolChoice:
+            | 'auto'
+            | 'required'
+            | { type: 'function'; function: { name: string } } = 'auto'
     ): Promise<ChatWithToolsResult> {
         try {
             if (!model?.trim()) {
@@ -108,15 +112,40 @@ export class ChatService implements IChatService {
             }
 
             const client = await this.clientFactory.getClient();
-            const response = await client.chat.completions.create(
-                {
-                    model,
-                    messages,
-                    tools,
-                    tool_choice: 'auto'
-                },
-                signal ? { signal } : undefined
-            );
+            let response;
+            try {
+                response = await client.chat.completions.create(
+                    {
+                        model,
+                        messages,
+                        tools,
+                        tool_choice: toolChoice
+                    },
+                    signal ? { signal } : undefined
+                );
+            } catch (error) {
+                // Some local providers reject forced tool_choice — fall back once.
+                const forced =
+                    toolChoice === 'required' ||
+                    (typeof toolChoice === 'object' && toolChoice?.type === 'function');
+                if (forced) {
+                    console.log(
+                        `[Motabix][tools] tool_choice=${JSON.stringify(toolChoice)} failed; retrying with auto. ` +
+                            `${error instanceof Error ? error.message : String(error)}`
+                    );
+                    response = await client.chat.completions.create(
+                        {
+                            model,
+                            messages,
+                            tools,
+                            tool_choice: 'auto'
+                        },
+                        signal ? { signal } : undefined
+                    );
+                } else {
+                    throw error;
+                }
+            }
 
             if (signal?.aborted) {
                 throw new Error('Stopped by user.');

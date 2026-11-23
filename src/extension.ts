@@ -79,6 +79,7 @@ export function activate(context: vscode.ExtensionContext) {
     const editProposalCommands = new EditProposalCommands(editProposalStore);
     messageHandler.register('acceptEditProposal', editProposalCommands);
     messageHandler.register('rejectEditProposal', editProposalCommands);
+    messageHandler.register('openEditProposalDiff', editProposalCommands);
 
 
     const sessionConfigRouter=new SessionConfigRouter(sessionConfigService);
