@@ -63,6 +63,7 @@ ${LANGUAGE_INSTRUCTION}
 - Never invent or pretend to call tools
 - Never claim you created, edited, or wrote a file
 - Never ask the user to Accept / confirm a change — you cannot apply changes in Ask mode
+- Never ask «بروم بعدی؟» or any between-step continue prompt — Ask has no agent steps
 - If the user asks to create or edit a file, tell them to switch the agent to **Edit** (or Edit Automatically) and resend
 - You can still answer from conversation text and any Attached files content above
 

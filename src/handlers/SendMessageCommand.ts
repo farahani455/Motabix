@@ -128,8 +128,8 @@ export class SendMessageCommand implements IWebviewCommand {
         const responseId = this.generateNewId();
         const model = String(message.model ?? '').trim();
 
-        // Only Edit / Edit Automatically may enter the agent tool loop.
-        // Ask and any unknown mode stay on plain chat streaming (no tools).
+        // T9-4: Ask never enters the agent loop — no tools, no «بروم بعدی؟».
+        // Only Edit / Edit Automatically may run tools.
         if (!isAgentMode(agentMode)) {
             await this.runAsk(webviewView, request, model, requestId, responseId, requestLang);
             return;
@@ -146,6 +146,7 @@ export class SendMessageCommand implements IWebviewCommand {
         );
     }
 
+    /** Plain chat stream only — no tools, no step-continue prompts (T9-4). */
     private async runAsk(
         webviewView: vscode.WebviewView,
         request: ChatCompletionMessageParam[],
@@ -236,6 +237,15 @@ export class SendMessageCommand implements IWebviewCommand {
         requestLang: string,
         agentMode: string
     ): Promise<void> {
+        // Belt-and-suspenders: Ask must never reach tool loop / step prompts (T9-4).
+        if (!isAgentMode(agentMode)) {
+            console.log(
+                `[Motabix][agent] refused runAgent for non-agent mode=${JSON.stringify(agentMode)}`
+            );
+            await this.runAsk(webviewView, request, model, requestId, responseId, requestLang);
+            return;
+        }
+
         webviewView.webview.postMessage({
             command: 'stream-start-response',
             requestId,
