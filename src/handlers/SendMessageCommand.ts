@@ -11,16 +11,18 @@ import { CodeHistoryService } from '../services/CodeHistoryService';
 import { NotifHandlerService } from '../services/NotifHandlerService';
 import { filesWithContent } from '../utils/fileUtilities';
 import { AgentRunLock } from '../services/AgentRunLock';
-import { isAgentMode, normalizeAgentMode } from '../utils/isAskMode';
+import { isAgentMode, isEditMode, normalizeAgentMode } from '../utils/isAskMode';
 import { ActiveDocumentManager } from './ActiveDocumentManager';
 import { ChatService } from '../services/ChatService';
-import { AgentLoopService } from '../agent/AgentLoopService';
+import { AgentLoopService, AgentLoopStepInfo } from '../agent/AgentLoopService';
 import { MOTABIX_TOOLS } from '../agent/motabixTools';
 import { ToolExecutor } from '../agent/ToolExecutor';
 import { EditProposalStore } from '../agent/EditProposalStore';
 import { MotabixSettingsService } from '../services/MotabixSettingsService';
 import { formatProviderError } from '../utils/formatProviderError';
 import { isAbortError } from '../utils/isAbortError';
+import { RunCommandApprovalService } from '../agent/RunCommandApprovalService';
+import { StepContinueService } from '../agent/StepContinueService';
 
 export class SendMessageCommand implements IWebviewCommand {
     private readonly agentLoop: AgentLoopService;
@@ -36,11 +38,13 @@ export class SendMessageCommand implements IWebviewCommand {
         private readonly agentRunLock: AgentRunLock,
         private readonly activeDocumentManager: ActiveDocumentManager,
         settingsService: MotabixSettingsService,
-        proposalStore: EditProposalStore
+        proposalStore: EditProposalStore,
+        private readonly runCommandApprovals: RunCommandApprovalService,
+        private readonly stepContinues: StepContinueService
     ) {
         this.agentLoop = new AgentLoopService(
             aiService,
-            new ToolExecutor(settingsService, proposalStore)
+            new ToolExecutor(settingsService, proposalStore, runCommandApprovals)
         );
     }
 
@@ -238,6 +242,31 @@ export class SendMessageCommand implements IWebviewCommand {
             responseId
         });
 
+        this.runCommandApprovals.setNotifier((approval) => {
+            webviewView.webview.postMessage({
+                command: 'runCommandApproval',
+                requestId,
+                responseId,
+                approvalId: approval.approvalId,
+                commandText: approval.command,
+                cwd: approval.cwd
+            });
+        });
+
+        // T9-2: Edit Automatically never shows «بروم بعدی؟» — only wire for Edit.
+        const manualEdit = isEditMode(agentMode);
+        if (manualEdit) {
+            this.stepContinues.setNotifier((request) => {
+                webviewView.webview.postMessage({
+                    command: 'stepContinuePrompt',
+                    requestId,
+                    responseId,
+                    continueId: request.continueId,
+                    step: request.step
+                });
+            });
+        }
+
         try {
             console.log(
                 `[Motabix][agent] runAgent requestId=${requestId} model=${model} agent=${agentMode}`
@@ -248,6 +277,14 @@ export class SendMessageCommand implements IWebviewCommand {
                 tools: MOTABIX_TOOLS,
                 agentMode,
                 signal: this.agentRunLock.getAbortSignal(),
+                askContinueAfterStep: manualEdit
+                    ? async (step) => {
+                          return this.stepContinues.request(
+                              step,
+                              this.agentRunLock.getAbortSignal()
+                          );
+                      }
+                    : undefined,
                 onStep: (info) => {
                     console.log(
                         `[Motabix][step ${info.step}] UI notify ${info.toolName}`
@@ -259,9 +296,7 @@ export class SendMessageCommand implements IWebviewCommand {
                         language: requestLang,
                         step: info.step,
                         toolName: info.toolName,
-                        text:
-                            `[step ${info.step}] ${info.toolName}(${info.argsPreview})\n` +
-                            `→ ${info.resultPreview}\n\n`
+                        text: formatAgentStepText(info)
                     });
 
                     if (info.toolName === 'edit_file') {
@@ -309,7 +344,13 @@ export class SendMessageCommand implements IWebviewCommand {
             });
 
             if (result.stopped) {
-                this.postStopped(webviewView, requestId, responseId, requestLang);
+                this.postStopped(
+                    webviewView,
+                    requestId,
+                    responseId,
+                    requestLang,
+                    result.finalText || 'Stopped by user.'
+                );
                 return;
             }
 
@@ -357,6 +398,11 @@ export class SendMessageCommand implements IWebviewCommand {
                 language: requestLang,
                 text
             });
+        } finally {
+            this.runCommandApprovals.cancelAll();
+            this.runCommandApprovals.setNotifier(null);
+            this.stepContinues.cancelAll();
+            this.stepContinues.setNotifier(null);
         }
     }
 
@@ -364,14 +410,16 @@ export class SendMessageCommand implements IWebviewCommand {
         webviewView: vscode.WebviewView,
         requestId: string,
         responseId: string,
-        requestLang: string
+        requestLang: string,
+        content = '\nStopped by user.'
     ): void {
+        const text = content.startsWith('\n') ? content : `\n${content}`;
         webviewView.webview.postMessage({
             command: 'stream-chunk-response',
             requestId,
             responseId,
             language: requestLang,
-            content: '\nStopped by user.'
+            content: text
         });
         webviewView.webview.postMessage({
             command: 'stream-end-response',
@@ -385,4 +433,103 @@ export class SendMessageCommand implements IWebviewCommand {
         const randomPart = Math.random().toString(36).substring(2, 9);
         return `req_${timestamp}_${randomPart}`;
     }
+}
+
+/** Short human-readable step lines for the chat (avoid dumping raw tool JSON). */
+function formatAgentStepText(info: AgentLoopStepInfo): string {
+    if (info.toolName === 'run_command') {
+        try {
+            const parsed = JSON.parse(info.result) as {
+                ok?: boolean;
+                command?: string;
+                cwd?: string;
+                exitCode?: number;
+                denied?: boolean;
+                output?: string;
+                error?: string;
+            };
+            if (parsed.denied) {
+                return (
+                    `[step ${info.step}] run_command denied\n` +
+                    `\`${parsed.command ?? ''}\`\n\n`
+                );
+            }
+            if ((parsed as { stopped?: boolean }).stopped) {
+                return (
+                    `[step ${info.step}] run_command stopped\n` +
+                    `\`${parsed.command ?? ''}\`\n\n`
+                );
+            }
+            const output = String(parsed.output ?? parsed.error ?? '').trim();
+            const preview =
+                output.length > 280 ? `…${output.slice(-280)}` : output;
+            const status = parsed.ok ? 'ok' : 'failed';
+            const exit =
+                parsed.exitCode === undefined ? '' : ` · exit ${parsed.exitCode}`;
+            return (
+                `[step ${info.step}] ran \`${parsed.command ?? ''}\`\n` +
+                `${status}${exit}` +
+                (parsed.cwd ? ` · ${parsed.cwd}` : '') +
+                (preview ? `\n${preview}` : '') +
+                `\n\n`
+            );
+        } catch {
+            // fall through
+        }
+    }
+
+    if (info.toolName === 'edit_file') {
+        try {
+            const parsed = JSON.parse(info.result) as {
+                ok?: boolean;
+                path?: string;
+                autoApplied?: boolean;
+                written?: boolean;
+                shrinkBlocked?: boolean;
+                error?: string;
+            };
+            if (!parsed.ok) {
+                return (
+                    `[step ${info.step}] edit_file failed` +
+                    (parsed.error ? `: ${parsed.error}` : '') +
+                    `\n\n`
+                );
+            }
+            const name = (parsed.path || '').split(/[/\\]/).pop() || parsed.path || 'file';
+            const how = parsed.autoApplied
+                ? 'auto-wrote'
+                : parsed.shrinkBlocked
+                  ? 'blocked shrink — Diff opened'
+                  : 'proposed Diff';
+            return `[step ${info.step}] edit_file ${how}: ${name}\n\n`;
+        } catch {
+            // fall through
+        }
+    }
+
+    if (info.toolName === 'read_file') {
+        try {
+            const parsed = JSON.parse(info.result) as {
+                ok?: boolean;
+                path?: string;
+                error?: string;
+            };
+            const name = (parsed.path || '').split(/[/\\]/).pop() || parsed.path || '';
+            if (!parsed.ok) {
+                return (
+                    `[step ${info.step}] read_file failed` +
+                    (parsed.error ? `: ${parsed.error}` : '') +
+                    `\n\n`
+                );
+            }
+            return `[step ${info.step}] read ${name}\n\n`;
+        } catch {
+            // fall through
+        }
+    }
+
+    return (
+        `[step ${info.step}] ${info.toolName}\n` +
+        `→ ${info.resultPreview}\n\n`
+    );
 }

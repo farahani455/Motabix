@@ -727,6 +727,13 @@ pre code br:last-child{
     padding-top: 8px;
 }
 
+.run-command-approval-card .edit-proposal-path code {
+    font-family: var(--vscode-editor-font-family, Consolas, monospace);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Legacy class names kept for older bubbles */
 .response-action-btn {
     display: none;

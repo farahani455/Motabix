@@ -1,7 +1,12 @@
-const vscode = acquireVsCodeApi();
+  const vscode = acquireVsCodeApi();
   let preferredModel = '';
   let isAgentRunning = false;
   let activeRequestId = null;
+  /** True only while a real editor tab is open (from extension). */
+  let activeDocumentAvailable = false;
+  let activeDocumentPath = null;
+  /** User cleared the chip; don't auto-readd until the active file changes. */
+  let activeDocumentDismissedPath = null;
 
   const elements = {
         messages: document.getElementById('messages'),
@@ -212,6 +217,11 @@ const vscode = acquireVsCodeApi();
         const contentType = this.getAttribute('data-content');
         const includedItem=getContentFileLis();
         if (contentType === 'active-document') {
+            if (!activeDocumentAvailable) {
+                elements.addContentDropdown.classList.add('hidden');
+                return;
+            }
+            activeDocumentDismissedPath = null;
             if(includedItem.indexOf('active-document') ==-1) {
                 addContentChip('Active Document', 'active-document', 'codicon-file');
             }
@@ -246,7 +256,11 @@ const vscode = acquireVsCodeApi();
  
  function handleRemoveChip(e) {
         e.stopPropagation();
-        this.closest('.content-chip').remove();
+        const chip = this.closest('.content-chip');
+        if (chip && chip.getAttribute('data-content') === 'active-document') {
+            activeDocumentDismissedPath = activeDocumentPath;
+        }
+        chip.remove();
  }
 
   function handleOpenSettings() {
@@ -284,6 +298,30 @@ function handleWindowMessage(event) {
         }
         case 'editProposalResult': {
             updateEditProposalCard(message.proposalId, message.status, message.message || message.path);
+            break;
+        }
+        case 'runCommandApproval': {
+            showRunCommandApprovalCard(message);
+            break;
+        }
+        case 'runCommandApprovalResult': {
+            updateRunCommandApprovalCard(
+                message.approvalId,
+                message.status,
+                message.message
+            );
+            break;
+        }
+        case 'stepContinuePrompt': {
+            showStepContinueCard(message);
+            break;
+        }
+        case 'stepContinueResult': {
+            updateStepContinueCard(
+                message.continueId,
+                message.status,
+                message.message
+            );
             break;
         }
         case 'agent-limit': {
@@ -509,14 +547,40 @@ function handleWindowMessage(event) {
     }
 
     function activeDocumentHandler(message){
-        if(message.isActive){
-            const includedItem=getContentFileLis();
-            if(includedItem.indexOf('active-document') ==-1) {
-                addContentChip('Active Document', 'active-document', 'codicon-file');
-            }
-            
-        }else{
-            document.querySelectorAll('[data-content="active-document"]').forEach(el => el.remove());
+        const nextPath = message.data && message.data.fileName
+            ? String(message.data.fileName)
+            : null;
+        activeDocumentAvailable = !!message.isActive && !!nextPath;
+        activeDocumentPath = activeDocumentAvailable ? nextPath : null;
+
+        const activeOption = document.querySelector(
+            '.content-option[data-content="active-document"]'
+        );
+        if (activeOption) {
+            activeOption.classList.toggle('hidden', !activeDocumentAvailable);
+        }
+
+        if (!activeDocumentAvailable) {
+            activeDocumentDismissedPath = null;
+            document.querySelectorAll('[data-content="active-document"]').forEach((el) => el.remove());
+            return;
+        }
+
+        // New file after a manual clear → show again.
+        if (
+            activeDocumentDismissedPath &&
+            activeDocumentDismissedPath !== activeDocumentPath
+        ) {
+            activeDocumentDismissedPath = null;
+        }
+
+        if (activeDocumentDismissedPath === activeDocumentPath) {
+            return;
+        }
+
+        const includedItem = getContentFileLis();
+        if (includedItem.indexOf('active-document') === -1) {
+            addContentChip('Active Document', 'active-document', 'codicon-file');
         }
     }
   function renderUserMessage(text) {
@@ -756,6 +820,192 @@ function handleWindowMessage(event) {
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    function showRunCommandApprovalCard(message) {
+        let bubble = document.querySelector(`[data-newid="${message.responseId}"]`);
+        if (!message.approvalId) {
+            return;
+        }
+        if (!bubble) {
+            bubble = document.createElement('div');
+            bubble.className = 'bubble ai-bubble';
+            bubble.setAttribute('data-newid', message.responseId);
+            elements.messages.appendChild(bubble);
+        }
+        ensureBubbleContent(bubble);
+
+        const existing = bubble.querySelector(
+            `[data-approval-id="${message.approvalId}"]`
+        );
+        if (existing) {
+            existing.remove();
+        }
+
+        const card = document.createElement('div');
+        card.className = 'edit-proposal-card run-command-approval-card';
+        card.setAttribute('data-approval-id', message.approvalId);
+        card.innerHTML = `
+            <div class="edit-proposal-meta">
+                <span class="codicon codicon-terminal"></span>
+                <div class="edit-proposal-copy">
+                    <div class="edit-proposal-title">Run command?</div>
+                    <div class="edit-proposal-path"><code>${escapeHtml(message.commandText || '')}</code></div>
+                    <div class="edit-proposal-hint">${escapeHtml(message.cwd || '')}</div>
+                </div>
+            </div>
+            <div class="edit-proposal-actions response-actions">
+                <button class="decision-btn decision-reject" type="button" data-action="deny" title="Deny">
+                    <span class="codicon codicon-close"></span>
+                    <span>Deny</span>
+                </button>
+                <button class="decision-btn decision-accept" type="button" data-action="allow" title="Allow">
+                    <span class="codicon codicon-check"></span>
+                    <span>Allow</span>
+                </button>
+            </div>
+        `;
+        bubble.appendChild(card);
+
+        card.querySelectorAll('[data-action]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.getAttribute('data-action');
+                const approvalId = card.getAttribute('data-approval-id');
+                if (action === 'allow') {
+                    vscode.postMessage({ command: 'allowRunCommand', approvalId });
+                } else if (action === 'deny') {
+                    vscode.postMessage({ command: 'denyRunCommand', approvalId });
+                }
+            });
+        });
+
+        elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
+
+    function updateRunCommandApprovalCard(approvalId, status, detail) {
+        const card = document.querySelector(`[data-approval-id="${approvalId}"]`);
+        if (!card) {
+            return;
+        }
+        const actions = card.querySelector('.edit-proposal-actions');
+        if (!actions) {
+            return;
+        }
+        if (status === 'allowed') {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-accepted">
+                    <span class="codicon codicon-check"></span>
+                    <span>Allowed — running</span>
+                </div>
+            `;
+        } else if (status === 'denied') {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-rejected">
+                    <span class="codicon codicon-close"></span>
+                    <span>Denied</span>
+                </div>
+            `;
+        } else {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-error">
+                    <span class="codicon codicon-warning"></span>
+                    <span>${escapeHtml(detail || 'Failed')}</span>
+                </div>
+            `;
+        }
+    }
+
+    function showStepContinueCard(message) {
+        let bubble = document.querySelector(`[data-newid="${message.responseId}"]`);
+        if (!message.continueId) {
+            return;
+        }
+        if (!bubble) {
+            bubble = document.createElement('div');
+            bubble.className = 'bubble ai-bubble';
+            bubble.setAttribute('data-newid', message.responseId);
+            elements.messages.appendChild(bubble);
+        }
+        ensureBubbleContent(bubble);
+
+        const existing = bubble.querySelector(
+            `[data-continue-id="${message.continueId}"]`
+        );
+        if (existing) {
+            existing.remove();
+        }
+
+        const stepLabel = message.step ? `Step ${message.step} done.` : '';
+        const card = document.createElement('div');
+        card.className = 'edit-proposal-card step-continue-card';
+        card.setAttribute('data-continue-id', message.continueId);
+        card.innerHTML = `
+            <div class="edit-proposal-meta">
+                <span class="codicon codicon-debug-continue"></span>
+                <div class="edit-proposal-copy">
+                    <div class="edit-proposal-title">بروم بعدی؟</div>
+                    <div class="edit-proposal-hint">${escapeHtml(stepLabel)}</div>
+                </div>
+            </div>
+            <div class="edit-proposal-actions response-actions">
+                <button class="decision-btn decision-reject" type="button" data-action="stop" title="Stop">
+                    <span class="codicon codicon-close"></span>
+                    <span>Stop</span>
+                </button>
+                <button class="decision-btn decision-accept" type="button" data-action="continue" title="Continue">
+                    <span class="codicon codicon-check"></span>
+                    <span>Continue</span>
+                </button>
+            </div>
+        `;
+        bubble.appendChild(card);
+
+        card.querySelectorAll('[data-action]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.getAttribute('data-action');
+                const continueId = card.getAttribute('data-continue-id');
+                if (action === 'continue') {
+                    vscode.postMessage({ command: 'continueAgentStep', continueId });
+                } else if (action === 'stop') {
+                    vscode.postMessage({ command: 'stopAgentStep', continueId });
+                }
+            });
+        });
+
+        elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
+
+    function updateStepContinueCard(continueId, status, detail) {
+        const card = document.querySelector(`[data-continue-id="${continueId}"]`);
+        if (!card) {
+            return;
+        }
+        const actions = card.querySelector('.edit-proposal-actions');
+        if (!actions) {
+            return;
+        }
+        if (status === 'continued') {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-accepted">
+                    <span class="codicon codicon-check"></span>
+                    <span>Continuing</span>
+                </div>
+            `;
+        } else if (status === 'stopped') {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-rejected">
+                    <span class="codicon codicon-close"></span>
+                    <span>Stopped here</span>
+                </div>
+            `;
+        } else {
+            actions.innerHTML = `
+                <div class="decision-status decision-status-error">
+                    <span class="codicon codicon-warning"></span>
+                    <span>${escapeHtml(detail || 'Failed')}</span>
+                </div>
+            `;
+        }
     }
 
     function updateEditProposalCard(proposalId, status, detail) {

@@ -120,15 +120,15 @@ export async function executeEditFile(
             console.log(
                 `[Motabix][edit_file] auto-applied proposalId=${proposal.id} path=${targetUri.fsPath} new=${isNewFile}`
             );
+            // T9-3 / T7: Auto writes immediately; Diff opens only from the chat item.
+        } else {
+            // Edit (or Auto shrink-blocked): open Diff so the user can Accept/Reject.
+            await openProposalDiff(proposalStore, proposal);
+            console.log(
+                `[Motabix][edit_file] opened diff proposalId=${proposal.id} path=${targetUri.fsPath} ` +
+                    `shrinkBlocked=${shrinkBlocked}`
+            );
         }
-
-        // Always open Diff (virtual before|after) so the user can see the change.
-        await openProposalDiff(proposalStore, proposal);
-
-        console.log(
-            `[Motabix][edit_file] opened diff proposalId=${proposal.id} path=${targetUri.fsPath} ` +
-                `written=${willAutoApply} shrinkBlocked=${shrinkBlocked}`
-        );
 
         return JSON.stringify({
             ok: true,
@@ -141,7 +141,7 @@ export async function executeEditFile(
             autoApplied: willAutoApply,
             shrinkBlocked,
             message: willAutoApply
-                ? 'File written. Diff opened (before|after). Click the chat item to reopen Diff.'
+                ? 'File written. Click the chat item to open Diff (before|after).'
                 : shrinkBlocked
                   ? 'Refused to auto-overwrite: new content is much smaller than the existing file. Diff opened — Accept only if you really want this.'
                   : 'Diff opened (left=before, right=proposal). Accept in chat to write the file; Reject to discard.'

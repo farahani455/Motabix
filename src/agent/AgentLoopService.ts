@@ -5,7 +5,7 @@ import type {
 import { AGENT_MAX_STEPS } from './motabixTools';
 import { ToolExecutor } from './ToolExecutor';
 import { ChatService, ChatToolCall, ChatWithToolsResult } from '../services/ChatService';
-import { isEditAutomatically } from '../utils/isAskMode';
+import { isEditMode } from '../utils/isAskMode';
 
 export type AgentLoopStepInfo = {
     step: number;
@@ -36,6 +36,8 @@ export class AgentLoopService {
         agentMode?: string;
         signal?: AbortSignal;
         onStep?: (info: AgentLoopStepInfo) => void;
+        /** T9-1: Edit mode — return false to stop before the next step. */
+        askContinueAfterStep?: (step: number) => Promise<boolean>;
         onHitMaxSteps?: (maxSteps: number) => void;
     }): Promise<AgentLoopResult> {
         // Hard-coded per PLAN — not configurable in MVP.
@@ -45,11 +47,17 @@ export class AgentLoopService {
         let nudgedForMissingTools = false;
         /** One-shot: force a tool call on the next completion only. */
         let forceToolsNextRound = true;
-        const initialUserWantsEdit = userAskedForFileEdit(latestUserText(messages));
+        /** Extra edit_file calls recovered from one fake multi-file dump. */
+        const pendingRecoveredEdits: ChatToolCall[] = [];
+        const initialUserText = latestUserText(messages);
+        const initialUserWantsCommand = userAskedForShellCommand(initialUserText);
+        const initialUserWantsEdit =
+            !initialUserWantsCommand && userAskedForFileEdit(initialUserText);
 
         console.log(
             `[Motabix][agent] start model=${options.model} agent=${options.agentMode ?? '(none)'} ` +
-                `maxSteps=${maxSteps} tools=${options.tools.length} wantsEdit=${initialUserWantsEdit}`
+                `maxSteps=${maxSteps} tools=${options.tools.length} ` +
+                `wantsCommand=${initialUserWantsCommand} wantsEdit=${initialUserWantsEdit}`
         );
 
         for (let step = 1; step <= maxSteps; step++) {
@@ -63,80 +71,113 @@ export class AgentLoopService {
                 };
             }
 
-            // Local models (qwen etc.) often ignore tools / paste markdown to replace manually.
-            // When the user asked for an edit, force edit_file specifically on the first/nudge round.
-            const toolChoice = !forceToolsNextRound
-                ? ('auto' as const)
-                : initialUserWantsEdit
-                  ? ({ type: 'function' as const, function: { name: 'edit_file' } })
-                  : ('required' as const);
-            forceToolsNextRound = false;
-            console.log(
-                `[Motabix][agent] round ${step}/${maxSteps} requesting completion… ` +
-                    `tool_choice=${JSON.stringify(toolChoice)}`
-            );
-
             let completion: ChatWithToolsResult;
-            try {
-                completion = await this.chatService.completeWithTools(
-                    messages,
-                    options.model,
-                    options.tools,
-                    options.signal,
-                    toolChoice
-                );
-            } catch (error) {
-                if (options.signal?.aborted) {
-                    console.log(`[Motabix][agent] aborted during round ${step}`);
-                    return {
-                        finalText: 'Stopped by user.',
-                        steps,
-                        stopped: true,
-                        hitMaxSteps: false
-                    };
-                }
-                throw error;
-            }
 
-            console.log(
-                `[Motabix][agent] round ${step} finishReason=${completion.finishReason} ` +
-                    `toolCalls.length=${completion.toolCalls.length} ` +
-                    `contentLength=${completion.content?.length ?? 0}`
-            );
+            // Drain fake multi-edit dumps one edit_file per step (no extra API round).
+            if (pendingRecoveredEdits.length > 0) {
+                const next = pendingRecoveredEdits.shift()!;
+                console.log(
+                    `[Motabix][agent] round ${step}/${maxSteps}: pending recovered ${next.name}`
+                );
+                completion = {
+                    content: null,
+                    toolCalls: [next],
+                    finishReason: 'tool_calls'
+                };
+            } else {
+                // Local models often paste shell/markdown instead of calling tools.
+                const toolChoice = !forceToolsNextRound
+                    ? ('auto' as const)
+                    : initialUserWantsCommand
+                      ? ({ type: 'function' as const, function: { name: 'run_command' } })
+                      : initialUserWantsEdit
+                        ? ({ type: 'function' as const, function: { name: 'edit_file' } })
+                        : ('required' as const);
+                forceToolsNextRound = false;
+                console.log(
+                    `[Motabix][agent] round ${step}/${maxSteps} requesting completion… ` +
+                        `tool_choice=${JSON.stringify(toolChoice)}`
+                );
+
+                try {
+                    completion = await this.chatService.completeWithTools(
+                        messages,
+                        options.model,
+                        options.tools,
+                        options.signal,
+                        toolChoice
+                    );
+                } catch (error) {
+                    if (options.signal?.aborted) {
+                        console.log(`[Motabix][agent] aborted during round ${step}`);
+                        return {
+                            finalText: 'Stopped by user.',
+                            steps,
+                            stopped: true,
+                            hitMaxSteps: false
+                        };
+                    }
+                    throw error;
+                }
+
+                console.log(
+                    `[Motabix][agent] round ${step} finishReason=${completion.finishReason} ` +
+                        `toolCalls.length=${completion.toolCalls.length} ` +
+                        `contentLength=${completion.content?.length ?? 0}`
+                );
+            }
 
             if (!completion.toolCalls.length) {
                 const prose = completion.content?.trim() || '';
                 const latestUser = latestUserText(messages);
+                const wantsCommand =
+                    userAskedForShellCommand(latestUser) || looksLikeShellDumpInsteadOfTool(prose);
                 const wantsEdit =
-                    userAskedForFileEdit(latestUser) || looksLikeCodeDumpInsteadOfTool(prose);
+                    !wantsCommand &&
+                    (userAskedForFileEdit(latestUser) ||
+                        looksLikeCodeDumpInsteadOfTool(prose) ||
+                        looksLikeFakeEditResultDump(prose));
 
-                // qwen often pastes a full file in markdown instead of calling edit_file.
-                const recovered = wantsEdit
-                    ? recoverEditFileFromMarkdown(prose, latestUser)
+                const recoveredCommand = wantsCommand
+                    ? recoverRunCommandFromMarkdown(prose)
                     : null;
+                const fakeEdits =
+                    !recoveredCommand && (wantsEdit || looksLikeFakeEditResultDump(prose))
+                        ? recoverFakeEditFileDumps(prose)
+                        : [];
+                const recoveredEdit =
+                    !recoveredCommand && fakeEdits.length === 0 && wantsEdit
+                        ? recoverEditFileFromMarkdown(prose, latestUser)
+                        : null;
+                const recovered = recoveredCommand ?? fakeEdits[0] ?? recoveredEdit;
+
                 if (recovered) {
-                    let recoveredPath = '(unknown)';
-                    try {
-                        recoveredPath = String(
-                            (JSON.parse(recovered.arguments) as { path?: string }).path ?? '(unknown)'
+                    if (fakeEdits.length > 1) {
+                        pendingRecoveredEdits.push(...fakeEdits.slice(1));
+                        console.log(
+                            `[Motabix][agent] recovered ${fakeEdits.length} fake edit_file dumps; ` +
+                                `${fakeEdits.length - 1} queued`
                         );
-                    } catch {
-                        // ignore
+                    } else {
+                        console.log(
+                            `[Motabix][agent] recovered ${recovered.name} from assistant prose`
+                        );
                     }
-                    console.log(
-                        `[Motabix][agent] recovered edit_file from markdown fence path=${recoveredPath}`
-                    );
                     completion = {
                         content: null,
                         toolCalls: [recovered],
                         finishReason: completion.finishReason
                     };
-                } else if (steps === 0 && !nudgedForMissingTools && wantsEdit) {
+                } else if (
+                    steps === 0 &&
+                    !nudgedForMissingTools &&
+                    (wantsCommand || wantsEdit)
+                ) {
                     nudgedForMissingTools = true;
                     forceToolsNextRound = true;
                     console.log(
-                        `[Motabix][agent] round ${step}: no tools but user asked for a file edit — nudging once` +
-                            (isEditAutomatically(options.agentMode) ? ' (Edit Automatically)' : '')
+                        `[Motabix][agent] round ${step}: no tools but user asked for ` +
+                            `${wantsCommand ? 'run_command' : 'edit_file'} — nudging once`
                     );
                     if (prose) {
                         messages.push({
@@ -146,17 +187,21 @@ export class AgentLoopService {
                     }
                     messages.push({
                         role: 'user',
-                        content:
-                            'SYSTEM: Do NOT paste code for the user to copy/replace. ' +
-                            'Call edit_file NOW with the full fixed file content. ' +
-                            'Arguments: {"path":"<file path>","content":"<entire file>"}. ' +
-                            'If an attached file path is in the user message, use that path.'
+                        content: wantsCommand
+                            ? 'SYSTEM: Do NOT paste shell commands for the user to copy. ' +
+                              'Call run_command NOW with {"command":"..."}. ' +
+                              'For delete on Windows use del/rm; then wait for the tool result.'
+                            : 'SYSTEM: Do NOT paste code for the user to copy/replace. ' +
+                              'Call edit_file NOW with the full fixed file content. ' +
+                              'Arguments: {"path":"<file path>","content":"<entire file>"}. ' +
+                              'If an attached file path is in the user message, use that path.'
                     });
                     step -= 1;
                     continue;
                 } else {
                     console.log(
-                        `[Motabix][agent] no tool calls — ending loop. stepsDone=${steps} wantsEdit=${wantsEdit}`
+                        `[Motabix][agent] no tool calls — ending loop. stepsDone=${steps} ` +
+                            `wantsCommand=${wantsCommand} wantsEdit=${wantsEdit}`
                     );
                     return {
                         finalText: sanitizeAssistantProse(prose),
@@ -216,7 +261,8 @@ export class AgentLoopService {
                     }
                     // read_file: no per-step cap — every call is executed.
                     result = await this.toolExecutor.execute(call.name, call.arguments, {
-                        agentMode: options.agentMode
+                        agentMode: options.agentMode,
+                        signal: options.signal
                     });
                 }
 
@@ -239,6 +285,38 @@ export class AgentLoopService {
                     tool_call_id: call.id,
                     content: result
                 });
+            }
+
+            // T9-1/T9-2: Edit asks «بروم بعدی؟»; Edit Automatically runs until
+            // natural end, Stop (abort), or maxSteps — never that prompt.
+            if (
+                isEditMode(options.agentMode) &&
+                step < maxSteps &&
+                options.askContinueAfterStep
+            ) {
+                console.log(
+                    `[Motabix][agent] step ${step}: waiting for continue (Edit mode)`
+                );
+                const shouldContinue = await options.askContinueAfterStep(step);
+                if (options.signal?.aborted) {
+                    return {
+                        finalText: 'Stopped by user.',
+                        steps,
+                        stopped: true,
+                        hitMaxSteps: false
+                    };
+                }
+                if (!shouldContinue) {
+                    console.log(
+                        `[Motabix][agent] step ${step}: user declined next step`
+                    );
+                    return {
+                        finalText: 'Agent stopped: user chose not to continue.',
+                        steps,
+                        stopped: true,
+                        hitMaxSteps: false
+                    };
+                }
             }
         }
 
@@ -299,7 +377,7 @@ function userAskedForFileEdit(userText: string): boolean {
     // Strip attached-files dump when checking intent.
     const intent = userText.split(/\nAttached files:/)[0] ?? userText;
     const asksEdit =
-        /اضافه|بساز|ایجاد|درست|اصلاح|رفع|فیکس|تغییر|بنویس|اعمال|عوض|سینتکس|syntax|error|bug|باگ|غلط|خراب|create\b|add (?:a )?file|new file|write (?:a )?file|edit\b|modify\b|update\b|refactor|fix\b|patch\b/i.test(
+        /اضافه|بساز|ایجاد|درست|اصلاح|رفع|فیکس|تغییر|بنویس|اعمال|عوض|ذخیره|بکش|جدا|بیرون|extract|سینتکس|syntax|error|bug|باگ|غلط|خراب|create\b|add (?:a )?file|new file|write (?:a )?file|edit\b|modify\b|update\b|refactor|fix\b|patch\b|split\b|move (?:to|into)/i.test(
             intent
         );
     if (
@@ -317,6 +395,132 @@ function userAskedForFileEdit(userText: string): boolean {
     return asksEdit;
 }
 
+/** User wants Motabix to actually run a shell command (not just explain it). */
+function userAskedForShellCommand(userText: string): boolean {
+    if (!userText) {
+        return false;
+    }
+    const intent = userText.split(/\nAttached files:/)[0] ?? userText;
+    // Pure how-to questions stay explanatory.
+    if (
+        /چطور|how (?:do|can|to)|توضیح بده|explain/i.test(intent) &&
+        !/run_command|حذف|پاک|del\b|rm\b|خودت اجرا|اجرا کن/i.test(intent)
+    ) {
+        return false;
+    }
+    return /run_command|با\s*run_command|خودت اجرا|اجرا کن|حذف کن|پاک کن|پاکش|حذفش|del\s|rm\s|rmdir|dir\b|ls\b|echo\b|node\s|npm\s|pnpm\s|yarn\s/i.test(
+        intent
+    );
+}
+
+function looksLikeShellDumpInsteadOfTool(text: string): boolean {
+    if (!text) {
+        return false;
+    }
+    if (/```(?:sh|bash|shell|cmd|powershell|ps1)?\s*\n[\s\S]{3,}?```/i.test(text)) {
+        return /del\b|rm\b|حذف|run_command|"command"\s*:/i.test(text);
+    }
+    return /run_command\s*[\n{]/.test(text) && /"command"\s*:/.test(text);
+}
+
+/**
+ * Recover a run_command call when the model pastes ```sh …``` or tool JSON instead.
+ */
+function recoverRunCommandFromMarkdown(text: string): ChatToolCall | null {
+    if (!text) {
+        return null;
+    }
+
+    // Full / partial tool JSON in prose
+    const named = text.match(
+        /\{\s*"name"\s*:\s*"run_command"\s*,\s*"arguments"\s*:\s*(\{[\s\S]*?\})\s*\}/
+    );
+    if (named?.[1]) {
+        try {
+            const args = JSON.parse(named[1]) as { command?: string };
+            if (typeof args.command === 'string' && args.command.trim()) {
+                return {
+                    id: 'call_recovered_md_run_command',
+                    name: 'run_command',
+                    arguments: JSON.stringify({ command: args.command.trim() })
+                };
+            }
+        } catch {
+            // try broken extract below
+        }
+    }
+
+    const commandField = text.match(/"command"\s*:\s*"((?:\\.|[^"\\])*)"/);
+    if (commandField?.[1] && /run_command/i.test(text)) {
+        try {
+            const command = JSON.parse(`"${commandField[1]}"`) as string;
+            if (command.trim()) {
+                return {
+                    id: 'call_recovered_md_run_command',
+                    name: 'run_command',
+                    arguments: JSON.stringify({ command: command.trim() })
+                };
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    const fences = [
+        ...text.matchAll(/```(?:sh|bash|shell|cmd|powershell|ps1)?\s*\n([\s\S]*?)```/gi)
+    ];
+    for (const fence of fences) {
+        let body = (fence[1] ?? '').trim();
+        if (!body) {
+            continue;
+        }
+        if (body.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(body) as { command?: string; name?: string };
+                if (typeof parsed.command === 'string' && parsed.command.trim()) {
+                    return {
+                        id: 'call_recovered_md_run_command',
+                        name: 'run_command',
+                        arguments: JSON.stringify({ command: parsed.command.trim() })
+                    };
+                }
+            } catch {
+                const inner = body.match(/"command"\s*:\s*"((?:\\.|[^"\\])*)"/);
+                if (inner?.[1]) {
+                    try {
+                        const command = JSON.parse(`"${inner[1]}"`) as string;
+                        if (command.trim()) {
+                            return {
+                                id: 'call_recovered_md_run_command',
+                                name: 'run_command',
+                                arguments: JSON.stringify({ command: command.trim() })
+                            };
+                        }
+                    } catch {
+                        // continue
+                    }
+                }
+            }
+            continue;
+        }
+        // Take first non-empty line as the command (skip comments).
+        const line =
+            body
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .find((l) => l && !l.startsWith('#')) ?? '';
+        if (line && line.length <= 2000) {
+            return {
+                id: 'call_recovered_md_run_command',
+                name: 'run_command',
+                arguments: JSON.stringify({ command: line })
+            };
+        }
+    }
+
+    return null;
+}
+
 function looksLikeCodeDumpInsteadOfTool(text: string): boolean {
     if (!text || text.length < 80) {
         return false;
@@ -327,6 +531,152 @@ function looksLikeCodeDumpInsteadOfTool(text: string): boolean {
             text
         );
     return hasFence && (replacey || text.length > 400);
+}
+
+/**
+ * Weak models invent fake tool results in prose, e.g.
+ * {"ok":true,"tool":"edit_file","path":"...","content":"..."}
+ * instead of calling edit_file.
+ */
+function looksLikeFakeEditResultDump(text: string): boolean {
+    if (!text || text.length < 40) {
+        return false;
+    }
+    return (
+        /"tool"\s*:\s*"edit_file"/.test(text) ||
+        /"name"\s*:\s*"edit_file"/.test(text)
+    ) && /"path"\s*:\s*"/.test(text) && /"content"\s*:/.test(text);
+}
+
+/**
+ * Turn one or more fake edit_file JSON dumps into real tool calls.
+ */
+function recoverFakeEditFileDumps(text: string): ChatToolCall[] {
+    if (!text) {
+        return [];
+    }
+
+    const recovered: ChatToolCall[] = [];
+    const seenPaths = new Set<string>();
+    let cursor = 0;
+
+    while (cursor < text.length) {
+        const start = text.indexOf('{', cursor);
+        if (start < 0) {
+            break;
+        }
+        const relativeEnd = findMatchingBraceFrom(text, start);
+        if (relativeEnd < 0) {
+            cursor = start + 1;
+            continue;
+        }
+        const slice = text.slice(start, relativeEnd + 1);
+        cursor = relativeEnd + 1;
+
+        const parsed = parseFakeEditFileDump(slice);
+        if (!parsed) {
+            continue;
+        }
+        const pathKey = parsed.path.replace(/\\/g, '/').toLowerCase();
+        if (seenPaths.has(pathKey)) {
+            continue;
+        }
+        seenPaths.add(pathKey);
+        recovered.push({
+            id: `call_recovered_fake_edit_${recovered.length}`,
+            name: 'edit_file',
+            arguments: JSON.stringify({
+                path: parsed.path,
+                content: parsed.content
+            })
+        });
+    }
+
+    return recovered;
+}
+
+function parseFakeEditFileDump(
+    slice: string
+): { path: string; content: string } | null {
+    let obj: Record<string, unknown>;
+    try {
+        const parsed = JSON.parse(slice) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null;
+        }
+        obj = parsed as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+
+    // {"ok":true,"tool":"edit_file","path":"...","content":"..."}
+    if (
+        (obj.tool === 'edit_file' || obj.name === 'edit_file') &&
+        typeof obj.path === 'string' &&
+        typeof obj.content === 'string' &&
+        obj.path.trim() &&
+        obj.content.length > 0
+    ) {
+        return { path: obj.path.trim(), content: obj.content };
+    }
+
+    // {"name":"edit_file","arguments":{"path":"...","content":"..."}}
+    if (obj.name === 'edit_file' || obj.tool === 'edit_file') {
+        let inner: unknown = obj.arguments ?? obj.parameters;
+        if (typeof inner === 'string') {
+            try {
+                inner = JSON.parse(inner);
+            } catch {
+                return null;
+            }
+        }
+        if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+            const args = inner as Record<string, unknown>;
+            if (
+                typeof args.path === 'string' &&
+                typeof args.content === 'string' &&
+                args.path.trim() &&
+                args.content.length > 0
+            ) {
+                return { path: args.path.trim(), content: args.content };
+            }
+        }
+    }
+
+    return null;
+}
+
+/** Index of the matching `}` for the `{` at start, or -1. */
+function findMatchingBraceFrom(text: string, start: number): number {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escape) {
+                escape = false;
+            } else if (ch === '\\') {
+                escape = true;
+            } else if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '{') {
+            depth += 1;
+        } else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return i;
+            }
+        }
+    }
+    return -1;
 }
 
 function attachedFilePathFromUser(userText: string): string | undefined {
@@ -429,5 +779,40 @@ function sanitizeAssistantProse(text: string): string {
             'اگر تغییر دیگری در فایل می‌خواهی، واضح بگو تا با edit_file اعمال شود.'
         );
     }
+    if (looksLikeFakeEditResultDump(text)) {
+        const cleaned = stripFakeEditResultDumps(text).trim();
+        if (!cleaned) {
+            return (
+                'مدل به‌جای فراخوانی edit_file فقط JSON جعلی نوشته بود و قابل بازیابی نبود. ' +
+                'لطفاً دوباره همان درخواست را بفرست.'
+            );
+        }
+        return cleaned;
+    }
     return text;
+}
+
+/** Remove fake edit_file JSON blobs from assistant prose for display. */
+function stripFakeEditResultDumps(text: string): string {
+    let result = '';
+    let cursor = 0;
+    while (cursor < text.length) {
+        const start = text.indexOf('{', cursor);
+        if (start < 0) {
+            result += text.slice(cursor);
+            break;
+        }
+        result += text.slice(cursor, start);
+        const end = findMatchingBraceFrom(text, start);
+        if (end < 0) {
+            result += text.slice(start);
+            break;
+        }
+        const slice = text.slice(start, end + 1);
+        if (!parseFakeEditFileDump(slice)) {
+            result += slice;
+        }
+        cursor = end + 1;
+    }
+    return result.replace(/\n{3,}/g, '\n\n');
 }

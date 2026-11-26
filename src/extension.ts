@@ -34,6 +34,10 @@ import {
     EditProposalStore
 } from './agent/EditProposalStore';
 import { EditProposalCommands } from './handlers/EditProposalCommands';
+import { RunCommandApprovalService } from './agent/RunCommandApprovalService';
+import { RunCommandApprovalCommands } from './handlers/RunCommandApprovalCommands';
+import { StepContinueService } from './agent/StepContinueService';
+import { StepContinueCommands } from './handlers/StepContinueCommands';
 
 export function activate(context: vscode.ExtensionContext) {
     const chatHistoryService= new ChatHistoryService(context);
@@ -44,6 +48,8 @@ export function activate(context: vscode.ExtensionContext) {
     const chatService= new ChatService(clientFactory);
     const agentRunLock = new AgentRunLock();
     const editProposalStore = new EditProposalStore();
+    const runCommandApprovals = new RunCommandApprovalService();
+    const stepContinues = new StepContinueService();
     const messageHandler = new MessageHandler();
     const renderchatHistory:RenderChatHistory=new RenderChatHistory(chatHistoryService);
     const diffService:DiffService=new DiffService();
@@ -61,7 +67,9 @@ export function activate(context: vscode.ExtensionContext) {
         agentRunLock,
         activeDocManager,
         appSettingsService,
-        editProposalStore
+        editProposalStore,
+        runCommandApprovals,
+        stepContinues
     ));
     messageHandler.register("openSettings", new OpenSettingsCommand(appSettingsService));
     messageHandler.register("getAppSettings", appSettingsService);
@@ -80,6 +88,12 @@ export function activate(context: vscode.ExtensionContext) {
     messageHandler.register('acceptEditProposal', editProposalCommands);
     messageHandler.register('rejectEditProposal', editProposalCommands);
     messageHandler.register('openEditProposalDiff', editProposalCommands);
+    const runCommandApprovalCommands = new RunCommandApprovalCommands(runCommandApprovals);
+    messageHandler.register('allowRunCommand', runCommandApprovalCommands);
+    messageHandler.register('denyRunCommand', runCommandApprovalCommands);
+    const stepContinueCommands = new StepContinueCommands(stepContinues);
+    messageHandler.register('continueAgentStep', stepContinueCommands);
+    messageHandler.register('stopAgentStep', stepContinueCommands);
 
 
     const sessionConfigRouter=new SessionConfigRouter(sessionConfigService);

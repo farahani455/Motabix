@@ -69,7 +69,7 @@ export const MOTABIX_TOOLS: ChatCompletionTool[] = [
         function: {
             name: 'run_command',
             description:
-                'Run a shell command. Working directory comes from Settings. Approval may be required. Only the last 2000 characters of combined stdout/stderr are returned to the model.',
+                'Run a shell command. Working directory comes from Settings. Approval may be required when Settings permission is ask. Only the last 2000 characters of combined stdout/stderr are returned.',
             parameters: {
                 type: 'object',
                 properties: {

@@ -18,13 +18,17 @@ export class ActiveDocumentManager {
         const current = vscode.window.activeTextEditor;
         if (current && this.isTrackable(current.document)) {
             this.remember(current);
+        } else {
+            this.syncFromVisibleEditors();
         }
 
         vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (editor && this.isTrackable(editor.document)) {
                 this.remember(editor);
+            } else {
+                this.syncFromVisibleEditors();
             }
-            this._onDidChangeState.fire(this.hasActiveEditor());
+            this._onDidChangeState.fire(this.hasOpenTrackableDocument());
         });
         vscode.window.onDidChangeTextEditorSelection((event) => {
             if (event.textEditor && this.isTrackable(event.textEditor.document)) {
@@ -32,36 +36,57 @@ export class ActiveDocumentManager {
             }
         });
         vscode.window.onDidChangeVisibleTextEditors(() => {
-            this._onDidChangeState.fire(this.hasActiveEditor());
+            this.syncFromVisibleEditors();
+            this._onDidChangeState.fire(this.hasOpenTrackableDocument());
         });
         vscode.workspace.onDidCloseTextDocument((document) => {
             if (this.lastDocument?.uri.toString() === document.uri.toString()) {
                 this.lastDocument = null;
+                this.syncFromVisibleEditors();
             }
+            this._onDidChangeState.fire(this.hasOpenTrackableDocument());
         });
     }
 
     public attach(webviewView: vscode.WebviewView): void {
-        this.onDidChangeState((hasEditor) => {
-            if (hasEditor) {
-                const info = this.getActiveEditorInfo();
-                webviewView.webview.postMessage({
-                    command: 'changeActiveDocument',
-                    isActive: true,
-                    data: info
-                });
-            } else {
-                // Still may have a remembered document for chat context.
-                const remembered = this.getActiveFileContext();
-                webviewView.webview.postMessage({
-                    command: 'changeActiveDocument',
-                    isActive: !!remembered,
-                    data: remembered
-                        ? { fileName: remembered.fileName, lineCount: remembered.lineCount }
-                        : undefined
-                });
-            }
+        // Initial sync — do not leave a stale Active Document chip in the UI.
+        this.pushState(webviewView);
+        this.onDidChangeState(() => {
+            this.pushState(webviewView);
         });
+    }
+
+    private pushState(webviewView: vscode.WebviewView): void {
+        const open = this.hasOpenTrackableDocument();
+        if (open) {
+            const info = this.getActiveEditorInfo();
+            webviewView.webview.postMessage({
+                command: 'changeActiveDocument',
+                isActive: true,
+                data: info
+            });
+            return;
+        }
+
+        webviewView.webview.postMessage({
+            command: 'changeActiveDocument',
+            isActive: false,
+            data: undefined
+        });
+    }
+
+    /** True when a real file/untitled tab is still open (not webview-only focus). */
+    public hasOpenTrackableDocument(): boolean {
+        if (
+            this.lastDocument &&
+            !this.lastDocument.isClosed &&
+            this.isTrackable(this.lastDocument)
+        ) {
+            return true;
+        }
+        return vscode.window.visibleTextEditors.some((editor) =>
+            this.isTrackable(editor.document)
+        );
     }
 
     public hasActiveEditor(): boolean {
@@ -80,7 +105,7 @@ export class ActiveDocumentManager {
         };
     }
 
-    /** Prefers focused editor; falls back to last tracked file tab (webview focus safe). */
+    /** Prefers focused editor; falls back to last tracked open tab (webview focus safe). */
     public getActiveFileContext(): ActiveFileContext | null {
         const editor = vscode.window.activeTextEditor;
         if (editor && this.isTrackable(editor.document)) {
@@ -88,11 +113,58 @@ export class ActiveDocumentManager {
             return this.fromDocument(editor.document, editor.selection.active);
         }
 
-        if (this.lastDocument && !this.lastDocument.isClosed && this.isTrackable(this.lastDocument)) {
+        if (
+            this.lastDocument &&
+            !this.lastDocument.isClosed &&
+            this.isTrackable(this.lastDocument)
+        ) {
             return this.fromDocument(this.lastDocument, this.lastCursor);
         }
 
         return null;
+    }
+
+    /** If focus left the editor, keep lastDocument only while that tab is still open. */
+    private syncFromVisibleEditors(): void {
+        if (
+            this.lastDocument &&
+            !this.lastDocument.isClosed &&
+            this.isTrackable(this.lastDocument) &&
+            this.isDocumentStillOpen(this.lastDocument)
+        ) {
+            return;
+        }
+
+        const next = vscode.window.visibleTextEditors.find((editor) =>
+            this.isTrackable(editor.document)
+        );
+        if (next) {
+            this.remember(next);
+            return;
+        }
+
+        this.lastDocument = null;
+    }
+
+    private isDocumentStillOpen(document: vscode.TextDocument): boolean {
+        const uri = document.uri.toString();
+        if (
+            vscode.window.visibleTextEditors.some(
+                (editor) => editor.document.uri.toString() === uri
+            )
+        ) {
+            return true;
+        }
+        // Tab may exist but not be in visibleTextEditors (e.g. in another group).
+        for (const group of vscode.window.tabGroups.all) {
+            for (const tab of group.tabs) {
+                const input = tab.input;
+                if (input instanceof vscode.TabInputText && input.uri.toString() === uri) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private remember(editor: vscode.TextEditor): void {

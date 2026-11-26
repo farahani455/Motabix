@@ -24,6 +24,11 @@ export function isEditAutomatically(agent: string | undefined | null): boolean {
     return normalizeAgentMode(agent) === 'Edit Automatically';
 }
 
+/** Manual Edit: between-step continue prompts (T9-1). */
+export function isEditMode(agent: string | undefined | null): boolean {
+    return normalizeAgentMode(agent) === 'Edit';
+}
+
 /** Modes that may run the agent tool loop (T5+). */
 export function isAgentMode(agent: string | undefined | null): boolean {
     const mode = normalizeAgentMode(agent);
